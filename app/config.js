@@ -16,7 +16,7 @@ export const RESEARCH_URL = "https://script.google.com/macros/s/AKfycbzIrCNmr59i
 export const STUDY_KEY = "9837rjc9urnc834rny987c49c08n30c98038ch7f";
 
 // Step 3 in SETUP.md (optional): Google OAuth client ID, only needed for Gmail/Calendar/Drive linking.
-export const GOOGLE_CLIENT_ID = "PASTE_GOOGLE_OAUTH_CLIENT_ID";
+export const GOOGLE_CLIENT_ID = "1042436528905-uqem2okp7avup8vq5vngfs8i4au33v34.apps.googleusercontent.com";
 
 // User IDs are turned into a made-up address so no real email is ever collected.
 export const ID_DOMAIN = "hourglass-study.app";
