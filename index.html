@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hourglass: make every hour count</title>
+<meta name="description" content="Hourglass helps students see how they spend their time across sleep, schoolwork, and free time.">
+<link rel="icon" href="app/icon.svg" type="image/svg+xml">
+<style>
+:root{--bg:#f4f6f9;--card:#fff;--text:#18212c;--muted:#566272;--line:#dfe4ea;--accent:#2b63d9;--on:#fff}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1218;--card:#171d26;--text:#e8edf3;--muted:#9aa8b8;--line:#2a3441;--accent:#7aa7ff;--on:#0b1220}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:17px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:820px;margin:0 auto;padding:0 20px 60px}
+nav{display:flex;justify-content:space-between;align-items:center;padding:18px 0;font-weight:800;font-size:20px}
+nav a{font-size:16px;font-weight:600;color:var(--accent);text-decoration:none}
+.hero{padding:48px 0 28px}
+h1{font-size:clamp(34px,7vw,56px);line-height:1.08;margin:0 0 14px}
+.lead{font-size:20px;color:var(--muted);max-width:620px}
+.btn{display:inline-block;background:var(--accent);color:var(--on);padding:14px 24px;border-radius:12px;font-weight:700;text-decoration:none;margin-top:18px}
+h2{font-size:26px;margin:44px 0 12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}
+.card h3{margin:0 0 6px;font-size:18px}
+.card p{margin:0;color:var(--muted);font-size:16px}
+footer{margin-top:50px;color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav><span>⌛ Hourglass</span><a href="app/">Open the app</a></nav>
+
+  <section class="hero">
+    <h1>Make every hour count.</h1>
+    <p class="lead">Hourglass helps students see how they spend their time across sleep, schoolwork, and free time, so they can build healthier, more balanced days.</p>
+    <a class="btn" href="app/">Open Hourglass</a>
+  </section>
+
+  <h2>How it works</h2>
+  <div class="grid">
+    <div class="card"><h3>1. Log your day</h3><p>Takes under a minute: hours of sleep, study or work, and free time.</p></div>
+    <div class="card"><h3>2. See your trends</h3><p>Simple graphs show how your sleep, focus and free time change over weeks.</p></div>
+    <div class="card"><h3>3. Plan ahead</h3><p>Add deadlines to your calendar and get a nightly reminder to log your day.</p></div>
+  </div>
+
+  <h2>A student research project</h2>
+  <p>Hourglass is also a school research project on how students use their time. Taking part is optional: when you create an account you choose whether to share your logs. Shared logs use a random code, never your name, and results are only reported as group totals. You can stop sharing and remove your data at any time in Settings.</p>
+
+  <h2>Add it to your phone</h2>
+  <p>Open the app in your phone's browser, then choose <b>Share → Add to Home Screen</b> (iPhone) or <b>Menu → Install app</b> (Android).</p>
+
+  <footer>Hourglass is a student project and not medical advice. If you're struggling, talk to a counselor or a trusted adult. In the US you can call or text 988 any time.</footer>
+</div>
+</body>
+</html>

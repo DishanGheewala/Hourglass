@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hourglass</title>
+<meta name="description" content="Hourglass: make every hour count.">
+<meta name="theme-color" content="#2b63d9">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+:root{--bg:#f4f6f9;--card:#fff;--text:#18212c;--muted:#566272;--line:#dfe4ea;--accent:#2b63d9;--on-accent:#fff;--c1:#2b63d9;--c2:#c76a0a;--danger:#b3261e;--ok:#1e7a46}
+[data-theme="dark"]{--bg:#0e1218;--card:#171d26;--text:#e8edf3;--muted:#9aa8b8;--line:#2a3441;--accent:#7aa7ff;--on-accent:#0b1220;--c1:#7aa7ff;--c2:#f2a85f;--danger:#ff8a80;--ok:#6fd49a}
+*{box-sizing:border-box}
+html{color-scheme:light}
+html[data-theme="dark"]{color-scheme:dark}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%}
+[hidden]{display:none!important}
+.wrap{max-width:760px;margin:0 auto;padding:0 16px calc(40px + env(safe-area-inset-bottom))}
+h1,h2,h3{line-height:1.2;margin:0}
+h2{font-size:22px;margin:18px 0 6px}
+h3{font-size:17px;margin:0 0 6px}
+header{display:flex;align-items:center;gap:12px;padding:16px 0 4px}
+header svg,.brandbig svg{width:34px;height:34px;flex:none}
+.brand{font-size:22px;font-weight:800}
+.tag{color:var(--muted);font-size:14px}
+.tabs{display:flex;gap:6px;overflow-x:auto;padding:10px 0;position:sticky;top:0;background:var(--bg);z-index:5;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tabs button{flex:none;padding:8px 14px;border-radius:999px;border:1px solid var(--line);background:var(--card);color:var(--text);min-height:44px;font:inherit;cursor:pointer;white-space:nowrap}
+.tabs button[aria-selected="true"]{background:var(--accent);color:var(--on-accent);border-color:var(--accent);font-weight:700}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin:12px 0}
+label{display:block;font-weight:600;font-size:14px;margin:12px 0 4px}
+.check{display:flex;gap:8px;align-items:center;font-weight:500}
+input,select,textarea{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}
+.check input{width:auto}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.row>*{flex:1 1 140px}
+button{font:inherit;cursor:pointer}
+.primary{background:var(--accent);color:var(--on-accent);border:0;border-radius:10px;padding:12px 18px;font-weight:700;min-height:44px;margin-top:14px}
+.primary:disabled{opacity:.5;cursor:not-allowed}
+.btn{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:10px;padding:10px 14px;min-height:44px}
+.btn.danger{color:var(--danger);border-color:var(--danger)}
+.btn.small{min-height:36px;padding:6px 10px;font-size:14px}
+.seg{display:flex;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--card);margin:12px 0}
+.seg button{flex:1;padding:10px 6px;border:0;background:transparent;color:var(--text);min-height:44px}
+.seg .on{background:var(--accent);color:var(--on-accent);font-weight:700}
+.muted{color:var(--muted);font-size:14px;margin:6px 0}
+.err{color:var(--danger);min-height:1.3em;margin:8px 0 0}
+.stack{display:grid;gap:8px;margin-top:10px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:12px 0}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.stat b{display:block;font-size:22px}
+.stat span{color:var(--muted);font-size:13px}
+.banner{border:1px solid var(--line);border-left:4px solid var(--accent);background:var(--card);border-radius:10px;padding:10px 12px;margin:12px 0;font-size:14px}
+.banner.due{border-left-color:var(--c2)}
+.logrow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+.logrow:last-child{border-bottom:0}
+.logrow small{color:var(--muted);display:block}
+.chartwrap{padding:10px}
+.chart{width:100%;height:auto;display:block}
+.chart .grid{stroke:var(--line);stroke-width:1}
+.chart .axis{fill:var(--muted);font-size:11px}
+.chart .line{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.chart .line.c1{stroke:var(--c1)} .chart .line.c2{stroke:var(--c2)}
+.chart .dot{stroke:var(--card);stroke-width:2}
+.chart .dot.c1{fill:var(--c1)} .chart .dot.c2{fill:var(--c2)}
+.chart .hit{fill:transparent}
+.chart g:hover .dot{r:6}
+details{margin-top:10px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.cal .dow{text-align:center;font-size:12px;color:var(--muted)}
+.cal .day{aspect-ratio:1;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);position:relative;padding:0}
+.cal .blank{visibility:hidden}
+.cal .day.today{border:2px solid var(--accent)}
+.cal .day.sel{background:var(--accent);color:var(--on-accent)}
+.cal .dot{position:absolute;bottom:5px;left:50%;transform:translateX(-50%);width:6px;height:6px;border-radius:50%;background:var(--c2)}
+.calhead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+.chat{display:flex;flex-direction:column;gap:8px;max-height:50vh;overflow:auto;padding:4px 0}
+.msg{padding:10px 12px;border-radius:14px;max-width:94%;overflow-wrap:anywhere}
+.msg.user{align-self:flex-end;background:var(--accent);color:var(--on-accent)}
+.msg.ai{align-self:flex-start;background:var(--card);border:1px solid var(--line)}
+.msg ol{margin:6px 0;padding-left:20px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.chatform{display:flex;gap:8px}
+.chatform input{flex:1}
+.chatform .primary{margin-top:0}
+.legend{font-size:13px;color:var(--muted);margin:6px 0}
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:grid;place-items:center;padding:16px;z-index:50}
+.modal-card{background:var(--card);color:var(--text);border-radius:16px;padding:20px;max-width:540px;width:100%;max-height:90vh;overflow:auto}
+#toast{position:fixed;left:50%;bottom:20px;transform:translate(-50%,20px);background:var(--text);color:var(--bg);padding:10px 16px;border-radius:12px;opacity:0;pointer-events:none;transition:.2s;z-index:60;max-width:90vw}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+.brandbig{display:flex;align-items:center;gap:12px;padding:32px 0 8px}
+#boot{padding:40px;text-align:center;color:var(--muted)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<div id="boot">Loading…</div>
+
+<div id="setup-banner" class="wrap" hidden>
+  <div class="card"><b>Almost there.</b> This app isn't connected to its database yet. Follow SETUP.md (step 1) and paste your values into <code>config.js</code>.</div>
+</div>
+
+<main id="auth" class="wrap" hidden>
+  <div class="brandbig">
+    <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M16 6h32v6c0 10-8 14-12 20 4 6 12 10 12 20v6H16v-6c0-10 8-14 12-20-4-6-12-10-12-20z" fill="none" stroke="var(--accent)" stroke-width="4" stroke-linejoin="round"/><path d="M24 14h16c-1 6-6 9-8 12-2-3-7-6-8-12zM32 38c3 4 8 7 9 14H23c1-7 6-10 9-14z" fill="var(--c2)"/></svg>
+    <div><div class="brand">Hourglass</div><div class="tag">Make every hour count.</div></div>
+  </div>
+  <div class="card">
+    <div class="seg" role="group" aria-label="Log in or sign up">
+      <button type="button" class="on" data-action="authmode" data-mode="login">Log in</button>
+      <button type="button" data-action="authmode" data-mode="signup">Sign up</button>
+    </div>
+    <form id="auth-form" data-form="auth">
+      <label for="a-id">User ID</label>
+      <input id="a-id" name="userid" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      <label for="a-pw">Password</label>
+      <input id="a-pw" name="password" type="password" autocomplete="current-password" required>
+      <div id="confirm-row" hidden>
+        <label for="a-pw2">Confirm password</label>
+        <input id="a-pw2" name="confirm" type="password" autocomplete="new-password">
+      </div>
+      <p class="muted" id="auth-hint" hidden>Pick a User ID that isn't your real name (3–20 letters, numbers, dots or underscores). We never ask for an email, so there is no password reset: write your password down somewhere safe.</p>
+      <p class="err" id="auth-error" role="alert"></p>
+      <button class="primary" id="auth-submit">Log in</button>
+    </form>
+  </div>
+</main>
+
+<div id="app" class="wrap" hidden>
+  <header>
+    <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M16 6h32v6c0 10-8 14-12 20 4 6 12 10 12 20v6H16v-6c0-10 8-14 12-20-4-6-12-10-12-20z" fill="none" stroke="var(--accent)" stroke-width="4" stroke-linejoin="round"/><path d="M24 14h16c-1 6-6 9-8 12-2-3-7-6-8-12zM32 38c3 4 8 7 9 14H23c1-7 6-10 9-14z" fill="var(--c2)"/></svg>
+    <div><div class="brand">Hourglass</div><div class="tag">Make every hour count.</div></div>
+  </header>
+
+  <nav id="tabs" class="tabs" role="tablist" aria-label="Sections">
+    <button role="tab" data-tab="log" aria-selected="true">Log</button>
+    <button role="tab" data-tab="sleep" aria-selected="false">Sleep</button>
+    <button role="tab" data-tab="work" aria-selected="false">Study / Work</button>
+    <button role="tab" data-tab="free" aria-selected="false">Free time</button>
+    <button role="tab" data-tab="calendar" aria-selected="false">Calendar</button>
+    <button role="tab" data-tab="ai" aria-selected="false">AI</button>
+    <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
+  </nav>
+
+  <section id="tab-log" role="tabpanel">
+    <h2>Log your day</h2>
+    <div id="log-banner"></div>
+    <div id="log-form"></div>
+    <div id="log-list"></div>
+  </section>
+  <section id="tab-sleep" role="tabpanel" hidden></section>
+  <section id="tab-work" role="tabpanel" hidden></section>
+  <section id="tab-free" role="tabpanel" hidden></section>
+  <section id="tab-calendar" role="tabpanel" hidden>
+    <h2>Calendar</h2>
+    <div id="cal-grid"></div>
+    <div id="cal-form"></div>
+    <div id="cal-list"></div>
+  </section>
+  <section id="tab-ai" role="tabpanel" hidden>
+    <h2>AI assistant</h2>
+    <p class="muted">Type a request in plain words. It can log your time, add deadlines, summarize your week and, once you link Google in Settings, draft emails and build quizzes.</p>
+    <div id="ai-log" class="chat" aria-live="polite"></div>
+    <div class="chips">
+      <button class="btn small" data-action="chip" data-text="Log sleep 7.5 hours sleepiness 4">Log sleep</button>
+      <button class="btn small" data-action="chip" data-text="Add deadline Bio test on Friday at 3pm">Add deadline</button>
+      <button class="btn small" data-action="chip" data-text="Summary of my week">Summary</button>
+      <button class="btn small" data-action="chip" data-text="Help">Help</button>
+    </div>
+    <form data-form="ai" class="chatform">
+      <input name="q" aria-label="Ask the assistant" placeholder="Ask me to do something…" maxlength="500" autocomplete="off" required>
+      <button class="primary">Send</button>
+    </form>
+  </section>
+  <section id="tab-settings" role="tabpanel" hidden></section>
+</div>
+
+<div id="modal" hidden></div>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
