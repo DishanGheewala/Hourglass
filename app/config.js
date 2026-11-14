@@ -4,10 +4,10 @@
 
 // Step 1 in SETUP.md: Firebase project settings -> "Your apps" -> Web app config
 export const firebaseConfig = {
-  apiKey: "PASTE_API_KEY",
-  authDomain: "PASTE_AUTH_DOMAIN",
-  projectId: "PASTE_PROJECT_ID",
-  appId: "PASTE_APP_ID"
+  apiKey: "AIzaSyA98mtdrnVUmyAnTrPkiliogx4nQYeXj_8",
+  authDomain: "hourglass-4f6f9.firebaseapp.com",
+  projectId: "hourglass-4f6f9",
+  appId: "1:1042436528905:web:670da5afdf852f691a11d8"
 };
 
 // Step 2 in SETUP.md: the Google Apps Script web app URL that writes consenting students'
