@@ -12,8 +12,8 @@ export const firebaseConfig = {
 
 // Step 2 in SETUP.md: the Google Apps Script web app URL that writes consenting students'
 // logs into the spreadsheet in YOUR Google Drive, and the same STUDY_KEY you set in that script.
-export const RESEARCH_URL = "PASTE_APPS_SCRIPT_WEB_APP_URL";
-export const STUDY_KEY = "PASTE_A_RANDOM_STUDY_KEY";
+export const RESEARCH_URL = "https://script.google.com/macros/s/AKfycbzIrCNmr59i7in2tZKHOgYsPxRXBaaZDrVc_kuRXynSoCJHnqFJxJTWuyGVhUWgY8nmUA/exec";
+export const STUDY_KEY = "9837rjc9urnc834rny987c49c08n30c98038ch7f";
 
 // Step 3 in SETUP.md (optional): Google OAuth client ID, only needed for Gmail/Calendar/Drive linking.
 export const GOOGLE_CLIENT_ID = "PASTE_GOOGLE_OAUTH_CLIENT_ID";
