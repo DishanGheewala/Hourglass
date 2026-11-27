@@ -1,6 +1,7 @@
-# Hourglass setup (all free)
+# Hourglass setup
 
-Do these in order. Steps 1 and 2 are required; step 3 is optional.
+Do these in order. Steps 1, 2 and 4 are required. Everything is free except the AI (step 4), which
+bills a small amount per message to your Anthropic account.
 
 ## Before real students use it
 Get school approval and parent/guardian consent for the study, and have your sponsoring teacher read
@@ -10,50 +11,86 @@ the consent text in `app/app.js` (search for "Research consent"). Edit the wordi
 1. Go to console.firebase.google.com and click **Add project**. Name it `hourglass`. Turn Google Analytics off.
 2. **Build → Authentication → Get started → Sign-in method → Email/Password → Enable → Save.**
 3. **Build → Firestore Database → Create database.** Choose **production mode** and any US location.
-4. In Firestore, open the **Rules** tab, replace everything with the contents of `firestore.rules`, and click **Publish**.
-5. **Project settings (gear icon) → Your apps → Web (`</>`)**. Register an app named `hourglass`. Copy the four values
-   (`apiKey`, `authDomain`, `projectId`, `appId`) into `app/config.js`.
-6. **Authentication → Settings → Authorized domains → Add domain**: add your Vercel address (for example
-   `hourglass-yourname.vercel.app`). Log-in will not work from your website until you do this.
+4. In Firestore, open the **Rules** tab, replace everything with the contents of `firestore.rules`, and click
+   **Publish**. (Do this again every time `firestore.rules` changes, including now.)
+5. **Project settings (gear icon) → Your apps → Web (`</>`)**. Copy `apiKey`, `authDomain`, `projectId`, `appId`
+   into `app/config.js`.
+6. **Authentication → Settings → Authorized domains → Add domain**: add your Vercel address.
 
 ## 2. Research spreadsheet in YOUR Google Drive
-1. Go to sheets.new. Name the spreadsheet `Hourglass research data`. It is created in your Drive.
-2. **Extensions → Apps Script.** Delete the sample code and paste in all of `apps-script.gs`.
-3. Change `STUDY_KEY` at the top to a long random string. Put the exact same string in `app/config.js` as `STUDY_KEY`.
-4. Click **Deploy → New deployment → Web app.** Set **Execute as: Me** and **Who has access: Anyone**. Click Deploy
-   and approve the permissions when Google asks.
-5. Copy the **Web app URL** into `app/config.js` as `RESEARCH_URL`.
-6. Test it: create a test account in your app, say yes to the consent, add a log, and check that a row appears on the
-   `Logs` tab. Delete the log in the app and check the row disappears.
+1. Open your `Hourglass research data` sheet (or make one at sheets.new).
+2. **Extensions → Apps Script.** Delete everything and paste in all of the new `apps-script.gs`.
+3. `STUDY_KEY` at the top must be **exactly** the same as `STUDY_KEY` in `app/config.js`.
+   (This was the bug: the script's key had an extra `a` at the end, so the sheet rejected every row.)
+4. Save, then **Deploy → Manage deployments → pencil (edit) → Version: New version → Deploy.**
+   Editing the code is not enough: until you deploy a new version, Google keeps running the old code.
+   Keep **Execute as: Me** and **Who has access: Anyone**. The web app URL stays the same.
+5. Test it: in the editor choose `testWrite` and press **Run**. A `P-TEST0000` row should appear on the `Logs`
+   tab (delete it afterwards). Then log something in the app with a test account that said yes to research.
+6. In the app, **Settings → Research sharing** shows "Last sync". If it says `error: bad key`, the keys still
+   don't match.
 
-What gets written: a random study code, category, date, hours, and the 1–10 rating. Never the User ID, name or email.
+What gets written: a random study code, category, date, hours, the 1–10 rating, and a Status column. Never the
+User ID, name or email. Rows are never deleted by the app: deleting a log marks its row "Deleted in app", and
+deleting an account or stopping sharing leaves existing rows in place. Logs saved before this fix are sent
+automatically the next time each consenting student opens the app.
 
-Note: `STUDY_KEY` is visible to anyone who views your website's code, so it only blocks casual junk, it is not a
-password. The script rejects badly formed data. Check the sheet occasionally for strange rows.
-
-## 3. Optional: link Gmail, Google Calendar and Drive
-Linking Google is optional, and I recommend using it for your own account only. Gmail and Drive access are
-"sensitive" Google permissions, and Google only lets an unverified app be used by accounts you add as test users.
-1. Go to console.cloud.google.com and create a project.
+## 3. Link Gmail, Google Calendar and Drive
+1. Go to console.cloud.google.com and open the project that has your OAuth client.
 2. **APIs & Services → Library**: enable **Google Calendar API**, **Gmail API** and **Google Drive API**.
-3. **OAuth consent screen**: choose External, fill in the app name, and under **Test users** add your own Gmail address.
-4. **Credentials → Create credentials → OAuth client ID → Web application.** Under **Authorized JavaScript origins**,
-   add your Vercel address (no trailing slash). Copy the **Client ID** into `app/config.js` as `GOOGLE_CLIENT_ID`.
-5. In the app: **Settings → Linked Google accounts → Link.** Google will warn that the app is unverified, which is
-   expected in test mode.
+3. **OAuth consent screen → Data access (Scopes)**: add `gmail.readonly`, `gmail.send`, `calendar.events`,
+   `drive.readonly` and `drive.file`.
+4. **Audience → Test users**: add the Gmail address of everyone who will link Google (up to 100).
+   Gmail-reading and Drive-reading are "restricted" Google permissions: an unverified app can only be used by
+   test users. Opening it to everyone requires Google's app verification and a security assessment, which is
+   not free. For a class project, test users are the practical choice.
+5. Your OAuth client's **Authorized JavaScript origins** must include your Vercel address (no trailing slash).
+6. People who linked Google before this update should press **Unlink** then **Link** so Google asks for the new
+   permissions.
 
-Safety rules built in: Gmail is **send only** (it cannot read your inbox), Drive is **read only**, emails go only
-to addresses you approve in Settings, and nothing is sent until you press **Send** on a draft.
+## 4. Vercel settings (AI assistant, alerts, Apple Calendar)
+In Vercel: your project → **Settings → Environment Variables**. Add each of these for **Production** (and
+Preview if you use it), then redeploy.
 
-## 4. Publish
-1. Upload everything in this folder to your GitHub repo (keep the `app` folder structure).
-2. Vercel redeploys automatically. Open `your-site.vercel.app/app/` on your phone and choose **Add to Home Screen**.
+| Name | Value |
+|---|---|
+| `ANTHROPIC_API_KEY` | Create one at console.anthropic.com → API keys. Add a few dollars of credit and set a monthly spend limit. |
+| `FIREBASE_SERVICE_ACCOUNT` | Firebase → Project settings → **Service accounts** → **Generate new private key**. Paste the whole JSON file's contents. |
+| `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` | On any computer with Node.js run `npx web-push generate-vapid-keys` and paste the two keys. |
+| `VAPID_SUBJECT` | `mailto:` followed by your email, e.g. `mailto:you@gmail.com` |
+| `CRON_SECRET` | Any long random string (letters and numbers). |
+| `AI_MODEL` (optional) | Defaults to `claude-opus-5-5`. `claude-sonnet-5-5` or `claude-haiku-5-5` are cheaper. |
+| `AI_DAILY_LIMIT` (optional) | AI steps per student per day. Default 200. |
+
+Never put these values in `config.js` or anywhere in GitHub: they are secrets.
+
+Costs: with Claude Opus 5.5 at medium effort, a typical chat message costs roughly 1–5 cents (more when it
+reads long files). Set a spend limit in the Anthropic console so a busy week can't surprise you.
+
+## 5. Alerts when the app is closed (free timer)
+Vercel's free plan only runs scheduled jobs once a day, so the Apps Script from step 2 does the timing:
+1. In `apps-script.gs`, set `APP_URL` to your Vercel address and `CRON_SECRET` to the same value as in Vercel.
+2. Save, choose `setupReminderTimer` in the editor, press **Run**, and approve. It now calls your app every
+   5 minutes, and the app sends each student's alerts when they are due (within about 5 minutes).
+3. In the app: **Settings → Reminder alerts → Turn on alerts for this device → Send me a test alert.**
+
+On iPhone and iPad (iOS 16.4+), alerts only work after **Share → Add to Home Screen**, then opening Hourglass
+from the Home Screen icon. That is an Apple rule for all websites. Android, Windows and Mac browsers work directly.
+
+## 6. Apple Calendar
+Nothing to set up beyond step 4. Students tap **Settings → Apple Calendar → Subscribe on this device** and their
+Hourglass deadlines appear in the iPhone Calendar app, updating by themselves, with an alert the day before.
+The same link also works in Google Calendar and Outlook ("subscribe from URL").
+This is one-way (Hourglass → Apple). Reading a student's Apple calendar would need their iCloud app-specific
+password, which isn't a safe thing to ask teenagers for.
+
+## 7. Publish
+Push to GitHub; Vercel redeploys automatically. Open `your-site.vercel.app/app/` on your phone and add it to
+your Home Screen.
 
 ## Known limits
-- **No password reset.** There is no email on file. If a student forgets their password, that account can't be
-  recovered (they can make a new one). The sign-up screen tells them to write it down.
-- **Reminders** can't be true background push notifications on a free website. The app offers a daily calendar
-  reminder (works on any phone), alerts while the app is open, and an optional Google Calendar reminder.
-- **The AI tab follows set commands** (log, deadlines, summary, email drafts, quizzes). It is not a chatbot that
-  understands anything. A real AI model needs a paid key kept on a server, so it is not part of the free version.
+- **No password reset.** There is no email on file. The sign-up screen tells students to write their password down.
+- **Emails are sent only when the student presses Send.** The assistant writes the whole email; the student
+  reviews it and sends it. Replies are detected while the app is open and Gmail is linked (Google sign-ins last
+  about an hour).
 - **Free tiers** (Firebase, Vercel, Google) have usage limits and can change. Check them before a big launch.

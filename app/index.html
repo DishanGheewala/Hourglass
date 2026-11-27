@@ -79,15 +79,31 @@ th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
 .cal .day.sel{background:var(--accent);color:var(--on-accent)}
 .cal .dot{position:absolute;bottom:5px;left:50%;transform:translateX(-50%);width:6px;height:6px;border-radius:50%;background:var(--c2)}
 .calhead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
-.chat{display:flex;flex-direction:column;gap:8px;max-height:50vh;overflow:auto;padding:4px 0}
+.chat{display:flex;flex-direction:column;gap:8px;min-height:40vh;max-height:62vh;overflow:auto;padding:4px 0}
 .msg{padding:10px 12px;border-radius:14px;max-width:94%;overflow-wrap:anywhere}
+.msg p{margin:0 0 8px}.msg p:last-child{margin-bottom:0}
+.msg ul,.msg ol{margin:6px 0;padding-left:22px}
+.msg code{background:var(--bg);padding:1px 4px;border-radius:4px}
+.msg a{color:inherit}
 .msg.user{align-self:flex-end;background:var(--accent);color:var(--on-accent)}
 .msg.ai{align-self:flex-start;background:var(--card);border:1px solid var(--line)}
-.msg ol{margin:6px 0;padding-left:20px}
-.chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
-.chatform{display:flex;gap:8px}
-.chatform input{flex:1}
+.msg.status{align-self:flex-start;color:var(--muted);font-size:13px;padding:2px 12px}
+.msg.err-msg{border-color:var(--danger);color:var(--danger)}
+.msg.notice{border-left:4px solid var(--c2)}
+.msg blockquote{margin:6px 0 0;padding:8px 10px;border-left:3px solid var(--line);background:var(--bg);border-radius:6px}
+.emailcard,.quiz{width:94%}
+.emailcard label,.quiz label{font-weight:600}
+.quiz li{margin-bottom:14px}
+.quiz .check{font-weight:400;margin:6px 0}
+.qres{margin-top:6px;font-size:14px;padding:6px 8px;border-radius:8px;background:var(--bg)}
+.qres.ok{color:var(--ok)}.qres.bad{color:var(--danger)}.qres span{color:var(--text)}
+.chatform{display:flex;gap:8px;align-items:flex-end}
+.chatform textarea{flex:1;resize:none;min-height:46px;max-height:160px}
 .chatform .primary{margin-top:0}
+.alertrow{display:grid;grid-template-columns:120px 1fr auto;gap:8px;align-items:center;margin:8px 0}
+@media (max-width:420px){.alertrow{grid-template-columns:1fr auto}.alertrow input[name^=l]{grid-column:1/-1;grid-row:2}}
+.okline{color:var(--ok);margin:4px 0;font-weight:600}
+.tabs button.badge::after{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c2);margin-left:6px;vertical-align:middle}
 .legend{font-size:13px;color:var(--muted);margin:6px 0}
 #modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:grid;place-items:center;padding:16px;z-index:50}
 .modal-card{background:var(--card);color:var(--text);border-radius:16px;padding:20px;max-width:540px;width:100%;max-height:90vh;overflow:auto}
@@ -164,19 +180,19 @@ th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
     <div id="cal-list"></div>
   </section>
   <section id="tab-ai" role="tabpanel" hidden>
-    <h2>AI assistant</h2>
-    <p class="muted">Type a request in plain words. It can log your time, add deadlines, summarize your week and, once you link Google in Settings, draft emails and build quizzes.</p>
+    <div class="calhead"><h2>AI assistant</h2><button class="btn small" data-action="ai-new">New chat</button></div>
     <div id="ai-log" class="chat" aria-live="polite"></div>
     <div class="chips">
-      <button class="btn small" data-action="chip" data-text="Log sleep 7.5 hours sleepiness 4">Log sleep</button>
-      <button class="btn small" data-action="chip" data-text="Add deadline Bio test on Friday at 3pm">Add deadline</button>
-      <button class="btn small" data-action="chip" data-text="Summary of my week">Summary</button>
-      <button class="btn small" data-action="chip" data-text="Help">Help</button>
+      <button class="btn small" data-action="chip" data-text="How did I sleep this week compared to last week, and what should I change?">My sleep</button>
+      <button class="btn small" data-action="chip" data-text="Help me plan my study time for my upcoming deadlines.">Plan my week</button>
+      <button class="btn small" data-action="chip" data-text="Summarize my unread emails from the last 3 days.">Summarize emails</button>
+      <button class="btn small" data-action="chip" data-text="Make a practice quiz from my notes on ">Quiz me</button>
     </div>
     <form data-form="ai" class="chatform">
-      <input name="q" aria-label="Ask the assistant" placeholder="Ask me to do something…" maxlength="500" autocomplete="off" required>
+      <textarea name="q" rows="1" aria-label="Message the assistant" placeholder="Message Hourglass…" maxlength="8000" autocomplete="off" required></textarea>
       <button class="primary">Send</button>
     </form>
+    <p class="muted">The assistant can make mistakes. Check important details.</p>
   </section>
   <section id="tab-settings" role="tabpanel" hidden></section>
 </div>

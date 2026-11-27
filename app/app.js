@@ -5,15 +5,15 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import {
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, onSnapshot, addDoc,
-  serverTimestamp, getDocs, writeBatch
+  serverTimestamp, getDocs, writeBatch, arrayUnion
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 import { firebaseConfig, RESEARCH_URL, STUDY_KEY, ID_DOMAIN } from './config.js';
 import {
-  esc, nl, pad, todayISO, addDays, fromISO, toISO, fmtDate, fmtHM, fmtTime12, normalizeId, validId, genCode, windowStats
+  esc, pad, todayISO, addDays, fmtDate, fmtHM, fmtTime12, normalizeId, validId, genCode, windowStats
 } from './util.js';
 import { chartSVG } from './charts.js';
-import { parseCommand, makeQuiz } from './parse.js';
 import * as G from './google.js';
+import * as AI from './ai.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -24,16 +24,16 @@ const CATS = {
   free: { label: 'Free time', dateLabel: 'Date', ratingKey: null, ratingQ: null }
 };
 const SERVICES = {
-  calendar: { name: 'Google Calendar', note: 'Add deadlines and a daily reminder to your Google Calendar.' },
-  gmail: { name: 'Gmail (send only)', note: 'Lets the assistant send an email you approve. It cannot read your inbox.' },
-  drive: { name: 'Google Drive (read only)', note: 'Lets the assistant read a folder you name, for example to build a practice quiz.' }
+  calendar: { name: 'Google Calendar', note: 'The assistant can read your calendar and add deadlines and study sessions.' },
+  gmail: { name: 'Gmail', note: 'The assistant can read and summarize your email, write emails for you to send, and tell you when someone replies.' },
+  drive: { name: 'Google Drive', note: 'The assistant can read your Docs, Slides, Sheets, PDFs and Word files to make study materials, and save new Docs.' }
 };
+const DEFAULT_ALERT = { time: '20:30', label: 'Time to log your day: sleep, study/work and free time.' };
 
 const state = {
-  user: null, profile: null, logs: [], deadlines: [],
+  user: null, profile: null, logs: [], deadlines: [], alerts: [], pushOn: false,
   tab: 'log', cat: 'sleep', range: { sleep: '30', work: '30', free: '30' },
-  calMonth: new Date(new Date().getFullYear(), new Date().getMonth(), 1), calSel: todayISO(),
-  aiStarted: false
+  calMonth: new Date(new Date().getFullYear(), new Date().getMonth(), 1), calSel: todayISO()
 };
 
 // ---------- small UI helpers ----------
@@ -42,7 +42,7 @@ function toast(msg) {
   t.textContent = msg;
   t.classList.add('show');
   clearTimeout(toast.t);
-  toast.t = setTimeout(() => t.classList.remove('show'), 3800);
+  toast.t = setTimeout(() => t.classList.remove('show'), 4200);
 }
 function openModal(html) {
   const m = $('#modal');
@@ -61,6 +61,8 @@ function applyTheme(t) {
   try { localStorage.setItem('hg_theme', t); } catch {}
 }
 applyTheme((() => { try { return localStorage.getItem('hg_theme'); } catch { return null; } })() || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 
 // ---------- Firebase ----------
 const configured = !String(firebaseConfig.apiKey).startsWith('PASTE');
@@ -71,21 +73,41 @@ if (configured) {
   db = getFirestore(fbApp);
 }
 const uref = () => doc(db, 'users', state.user.uid);
+const pushRef = () => doc(db, 'push', state.user.uid);
 const logsCol = () => collection(db, 'users', state.user.uid, 'logs');
 const dlCol = () => collection(db, 'users', state.user.uid, 'deadlines');
 async function patchProfile(p) { await updateDoc(uref(), p); state.profile = { ...state.profile, ...p }; }
 
-// ---------- research sharing (only with consent) ----------
+// ---------- research spreadsheet (only with consent) ----------
+// Logs from students who said yes are sent to the Google Sheet in the project owner's Drive
+// (apps-script.gs). Items wait in a queue on the device until the sheet confirms it got them.
 const researchReady = () => RESEARCH_URL && !String(RESEARCH_URL).startsWith('PASTE');
 const qKey = () => 'hg_queue_' + state.user.uid;
 const readQ = key => { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch { return []; } };
-function sendResearch(item, { force = false } = {}) {
-  if (!state.user || !researchReady() || (!force && !state.profile?.consent)) return;
+function sendResearch(item) {
+  if (!state.user || !researchReady() || !state.profile?.consent) return;
   const key = qKey();
   const q = readQ(key);
   q.push({ ...item, code: state.profile.participantCode, ts: new Date().toISOString() });
-  localStorage.setItem(key, JSON.stringify(q));
+  lsSet(key, JSON.stringify(q));
   flushQueue();
+}
+async function postResearch(item) {
+  const body = JSON.stringify({ ...item, key: STUDY_KEY });
+  try {
+    const r = await fetch(RESEARCH_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body, redirect: 'follow' });
+    const j = await r.json().catch(() => ({ ok: r.ok }));
+    lsSet('hg_research_status', j.ok ? `ok ${new Date().toLocaleString()}` : `error: ${j.error || r.status}`);
+    if (!j.ok) console.warn('Research sheet did not accept a row:', j.error);
+    return true;
+  } catch {
+    // Some browsers block reading the reply; send it without reading the reply instead.
+    try {
+      await fetch(RESEARCH_URL, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body });
+      lsSet('hg_research_status', `sent (unconfirmed) ${new Date().toLocaleString()}`);
+      return true;
+    } catch { return false; } // offline: keep it in the queue
+  }
 }
 let flushing = false;
 async function flushQueue() {
@@ -95,14 +117,18 @@ async function flushQueue() {
   try {
     let q;
     while ((q = readQ(key)).length) {
-      await fetch(RESEARCH_URL, {
-        method: 'POST', mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ ...q[0], key: STUDY_KEY })
-      });
-      localStorage.setItem(key, JSON.stringify(readQ(key).slice(1)));
+      if (!(await postResearch(q[0]))) break;
+      lsSet(key, JSON.stringify(readQ(key).slice(1)));
     }
-  } catch { /* offline: try again next time */ } finally { flushing = false; }
+  } finally { flushing = false; }
+}
+// Sends every existing log once, so logs saved before the sheet was working get copied too.
+function backfillResearch() {
+  const flag = 'hg_backfill_v2_' + state.user.uid;
+  if (!state.profile?.consent || lsGet(flag)) return;
+  sendResearch({ action: 'consent' });
+  state.logs.forEach(l => sendResearch({ action: 'upsert', category: l.category, date: l.date, hours: l.hours, rating: l.rating ?? null }));
+  lsSet(flag, '1');
 }
 
 // ---------- consent ----------
@@ -112,8 +138,8 @@ function askConsent() {
       <h2 style="margin-top:0">Research consent</h2>
       <p>Hourglass is also a school research project about how students spend their time.</p>
       <p><b>If you say yes:</b> your sleep, study/work and free-time logs (hours, sleepiness and productivity ratings, and dates) are copied to a private research spreadsheet. The spreadsheet uses a random study code, never your User ID, and we collect no name, email or school account. Results are only reported as group totals, so <b>your identity will not be disclosed</b>.</p>
-      <p>Your calendar deadlines and anything you ask the AI assistant are never shared.</p>
-      <p><b>It's your choice.</b> The app works exactly the same if you say no. You can change your mind any time in Settings, which stops the sharing and removes your rows from the spreadsheet.</p>
+      <p>Your calendar, emails, files and anything you ask the AI assistant are never shared.</p>
+      <p><b>It's your choice.</b> The app works exactly the same if you say no. You can stop sharing any time in Settings. Logs that were already shared stay in the study, anonymously, under your random code.</p>
       <label class="check"><input type="checkbox" id="c-age"> I'm 18 or older, or my parent/guardian says I can take part.</label>
       <div class="stack">
         <button class="primary" id="c-yes" disabled>I consent: share my logs for research</button>
@@ -178,15 +204,26 @@ async function doAuth(form) {
 }
 
 let unsubs = [];
-let reminderTimer = null;
-function stopListeners() { unsubs.forEach(u => u()); unsubs = []; clearInterval(reminderTimer); }
+function stopListeners() { unsubs.forEach(u => u()); unsubs = []; }
+
+AI.initAI({
+  db, state, CATS, toast,
+  saveLog: (c, d, h, r) => saveLog(c, d, h, r),
+  deleteLog: l => deleteLog(l),
+  addDeadline: d => addDeadline(d),
+  deleteDeadline: d => deleteDoc(doc(dlCol(), d.id)),
+  setAlerts: a => saveAlerts(a),
+  pushEnabled: () => state.pushOn,
+  notify: (title, body) => notify(title, body),
+  markAI: () => { if (state.tab !== 'ai') $('[data-tab="ai"]').classList.add('badge'); }
+});
 
 if (auth) {
   onAuthStateChanged(auth, async user => {
     stopListeners();
     if (!user) {
-      state.user = null; state.profile = null; state.logs = []; state.deadlines = [];
-      state.aiStarted = false; $('#ai-log').innerHTML = '';
+      state.user = null; state.profile = null; state.logs = []; state.deadlines = []; state.alerts = [];
+      AI.resetAI();
       setAuthMode('login');
       show('auth');
       return;
@@ -199,20 +236,22 @@ if (auth) {
         const consent = await askConsent();
         await setDoc(uref(), {
           userId: user.email.split('@')[0], participantCode: snap.exists() && snap.data().participantCode ? snap.data().participantCode : genCode(),
-          consent, consentAt: serverTimestamp(), reminderTime: '20:30', theme: document.documentElement.dataset.theme,
-          approved: [], linked: {}, reminderEventId: null, createdAt: serverTimestamp()
+          consent, consentAt: serverTimestamp(), theme: document.documentElement.dataset.theme,
+          displayName: '', linked: {}, createdAt: serverTimestamp()
         }, { merge: true });
         snap = await getDoc(uref());
       }
       state.profile = snap.data();
       applyTheme(state.profile.theme || document.documentElement.dataset.theme);
+      await loadAlerts();
       show('app');
       startListeners();
       setTab(state.tab);
       flushQueue();
-      reminderTimer = setInterval(checkReminder, 60000);
-      checkReminder();
+      checkPushOn();
+      AI.loadAI();
     } catch (e) {
+      console.error(e);
       toast('Could not load your account. Check your connection and refresh.');
     }
   });
@@ -223,9 +262,12 @@ if (auth) {
   setAuthMode('login');
 }
 
+let firstLogs = true;
 function startListeners() {
+  firstLogs = true;
   unsubs.push(onSnapshot(logsCol(), snap => {
     state.logs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (firstLogs) { firstLogs = false; backfillResearch(); }
     renderData();
   }, () => toast('Could not load your logs.')));
   unsubs.push(onSnapshot(dlCol(), snap => {
@@ -243,7 +285,7 @@ function setTab(tab) {
   if (tab === 'log') { renderLogForm(); renderLogList(); }
   else if (CATS[tab]) renderTrend(tab);
   else if (tab === 'calendar') { renderCalForm(); renderCalendar(); }
-  else if (tab === 'ai') startAI();
+  else if (tab === 'ai') { $('[data-tab="ai"]').classList.remove('badge'); const l = $('#ai-log'); l.scrollTop = l.scrollHeight; }
   else if (tab === 'settings') renderSettings();
   window.scrollTo({ top: 0 });
 }
@@ -288,8 +330,7 @@ function prefillLog() {
 }
 function renderLogList() {
   const miss = missingToday();
-  const past = state.profile && new Date() >= reminderToday();
-  $('#log-banner').innerHTML = `<div class="banner ${miss.length && past ? 'due' : ''}">${miss.length
+  $('#log-banner').innerHTML = `<div class="banner ${miss.length ? 'due' : ''}">${miss.length
     ? `Today: ${3 - miss.length} of 3 logged. Still to add: ${miss.map(c => esc(CATS[c].label)).join(', ')}.`
     : 'All three logged for today. Nice work.'}</div>`;
   const c = CATS[state.cat];
@@ -301,6 +342,12 @@ function renderLogList() {
 async function saveLog(cat, date, hours, rating) {
   await setDoc(doc(logsCol(), `${cat}_${date}`), { category: cat, date, hours, rating: rating ?? null, updatedAt: serverTimestamp() });
   sendResearch({ action: 'upsert', category: cat, date, hours, rating: rating ?? null });
+}
+// Deleting a log removes it from the app. In the research sheet the row is kept and only marked
+// "Deleted in app", so data that was already collected is never lost.
+async function deleteLog(l) {
+  await deleteDoc(doc(logsCol(), l.id));
+  sendResearch({ action: 'delete', category: l.category, date: l.date });
 }
 
 // ---------- trend tabs ----------
@@ -334,7 +381,7 @@ function renderCalForm() {
     <label for="d-title">What is due?</label><input id="d-title" name="title" maxlength="100" required>
     <div class="row"><div><label for="d-date">Date</label><input id="d-date" type="date" name="date" value="${esc(state.calSel)}" required></div>
     <div><label for="d-time">Time (optional)</label><input id="d-time" type="time" name="time"></div></div>
-    ${L.calendar ? '<label class="check"><input type="checkbox" name="gcal"> Also add a copy to my Google Calendar</label>' : ''}
+    ${L.calendar ? '<label class="check"><input type="checkbox" name="gcal" checked> Also add a copy to my Google Calendar</label>' : ''}
     <button class="primary">Add deadline</button></form>`;
 }
 function renderCalendar() {
@@ -356,29 +403,77 @@ function renderCalendar() {
   const row = d => `<div class="logrow"><div><b>${esc(d.title)}</b><small>${esc(fmtDate(d.date))}${d.time ? ' · ' + esc(fmtTime12(d.time)) : ''}</small></div><button class="btn small danger" data-action="del-deadline" data-id="${esc(d.id)}" aria-label="Delete ${esc(d.title)}">Delete</button></div>`;
   const up = state.deadlines.filter(d => d.date >= today);
   const old = state.deadlines.filter(d => d.date < today).slice(-5).reverse();
-  $('#cal-list').innerHTML = `<div class="card"><h3>Upcoming</h3>${up.length ? up.map(row).join('') : '<p class="muted">No upcoming deadlines.</p>'}</div>${old.length ? `<div class="card"><h3>Past</h3>${old.map(row).join('')}</div>` : ''}`;
+  $('#cal-list').innerHTML = `<div class="card"><h3>Upcoming</h3>${up.length ? up.map(row).join('') : '<p class="muted">No upcoming deadlines.</p>'}</div>${old.length ? `<div class="card"><h3>Past</h3>${old.map(row).join('')}</div>` : ''}
+    <p class="muted">Want these on your iPhone? Settings → Apple Calendar.</p>`;
 }
 async function addDeadline({ title, date, time, gcal }) {
   await addDoc(dlCol(), { title, date, time: time || '', createdAt: serverTimestamp() });
-  if (gcal) await G.addCalendarEvent({ title, date, time });
+  if (gcal) await G.addCalendarEvent({ title: `Due: ${title}`, date, time });
 }
 
-// ---------- reminders ----------
-const reminderToday = () => {
-  const [h, m] = (state.profile?.reminderTime || '20:30').split(':').map(Number);
-  const d = new Date(); d.setHours(h, m, 0, 0); return d;
-};
-function checkReminder() {
-  if (!state.profile) return;
-  renderLogBannerOnly();
-  const flag = 'hg_notified_' + todayISO();
-  if (new Date() < reminderToday() || localStorage.getItem(flag) || !missingToday().length) return;
-  if ('Notification' in window && Notification.permission === 'granted') {
-    try { new Notification('Hourglass', { body: 'Time to log your day: sleep, study/work and free time.' }); } catch {}
-    localStorage.setItem(flag, '1');
+// ---------- reminder alerts (push notifications, work even when the app is closed) ----------
+async function loadAlerts() {
+  const snap = await getDoc(pushRef());
+  if (snap.exists() && Array.isArray(snap.data().alerts)) state.alerts = snap.data().alerts;
+  else {
+    state.alerts = [{ ...DEFAULT_ALERT, time: state.profile.reminderTime || DEFAULT_ALERT.time }];
+    await setDoc(pushRef(), { alerts: state.alerts, tz: Intl.DateTimeFormat().resolvedOptions().timeZone }, { merge: true });
   }
 }
-function renderLogBannerOnly() { if (state.tab === 'log') renderLogList(); }
+async function saveAlerts(alerts) {
+  const clean = [...new Map(alerts.filter(a => /^\d{2}:\d{2}$/.test(a.time)).map(a => [a.time, a])).values()].sort((a, b) => a.time.localeCompare(b.time));
+  await setDoc(pushRef(), { alerts: clean, tz: Intl.DateTimeFormat().resolvedOptions().timeZone }, { merge: true });
+  state.alerts = clean;
+  if (state.tab === 'settings') renderSettings();
+}
+const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+async function swReg() { return navigator.serviceWorker.register('sw.js', { scope: './' }); }
+async function checkPushOn() {
+  state.pushOn = false;
+  if (!pushSupported() || Notification.permission !== 'granted') return;
+  try {
+    const reg = await swReg();
+    const sub = await reg.pushManager.getSubscription();
+    state.pushOn = !!sub;
+    if (sub) await setDoc(pushRef(), { subs: arrayUnion(JSON.parse(JSON.stringify(sub))), tz: Intl.DateTimeFormat().resolvedOptions().timeZone }, { merge: true });
+  } catch {}
+  if (state.tab === 'settings') renderSettings();
+}
+const b64ToBytes = s => { const p = '='.repeat((4 - (s.length % 4)) % 4); const raw = atob((s + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(raw, c => c.charCodeAt(0)); };
+async function enablePush() {
+  if (isIOS() && !isStandalone()) {
+    openModal(`<h2 style="margin-top:0">One step first on iPhone</h2><p>Apple only allows alerts for apps on your Home Screen.</p><ol><li>Tap the <b>Share</b> button in Safari.</li><li>Choose <b>Add to Home Screen</b>.</li><li>Open Hourglass from your Home Screen, log in, and turn on alerts here again.</li></ol><button class="primary" data-action="close-modal">Got it</button>`);
+    return;
+  }
+  if (!pushSupported()) return toast('This browser does not support alerts. Try Chrome, Edge, Firefox or Safari.');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') return toast('Alerts were blocked. Allow notifications for this site in your browser settings.');
+  const kr = await fetch('/api/push-key');
+  const kj = await kr.json().catch(() => ({}));
+  if (!kr.ok) throw new Error(kj.error || 'Alerts are not set up on the server yet (SETUP.md, step 4).');
+  const reg = await swReg();
+  await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(kj.key) });
+  await setDoc(pushRef(), { subs: arrayUnion(JSON.parse(JSON.stringify(sub))), tz: Intl.DateTimeFormat().resolvedOptions().timeZone }, { merge: true });
+  state.pushOn = true;
+  toast('Alerts are on for this device.');
+  renderSettings();
+}
+async function testPush() {
+  const token = await state.user.getIdToken();
+  const r = await fetch('/api/push-test', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+  const j = await r.json().catch(() => ({}));
+  toast(r.ok ? `Test alert sent to ${j.sent} device${j.sent === 1 ? '' : 's'}.` : j.error || 'Could not send a test alert.');
+}
+async function notify(title, body) {
+  if ('Notification' in window && Notification.permission === 'granted' && document.hidden) {
+    try { const reg = await swReg(); await reg.showNotification(title, { body, icon: 'icon.svg', tag: 'hg-reply' }); return; } catch {}
+  }
+  toast(title);
+}
 function downloadReminderICS(time) {
   const [hh, mm] = time.split(':');
   const d = new Date();
@@ -391,131 +486,57 @@ function downloadReminderICS(time) {
   document.body.appendChild(a); a.click(); a.remove();
 }
 
-// ---------- AI assistant ----------
-function addMsg(role, html) {
-  const log = $('#ai-log');
-  const div = document.createElement('div');
-  div.className = 'msg ' + role;
-  div.innerHTML = html;
-  log.appendChild(div);
-  log.scrollTop = log.scrollHeight;
-  return div;
-}
-const HELP = `Here's what I can do:<ol>
-<li><b>Log time:</b> “log sleep 7.5 hours sleepiness 4”, “log study 2 hours productivity 7 yesterday”, “log free time 3 hours”</li>
-<li><b>Deadlines:</b> “add deadline Bio test on Friday at 3pm”</li>
-<li><b>Summary:</b> “summary of my week” or “list my deadlines”</li>
-<li><b>Email</b> (Gmail linked): “email ms.lee@school.org subject: Survey body: Can we meet Friday?”. I show a draft and send only after you press Send, and only to approved recipients.</li>
-<li><b>Quiz</b> (Drive linked): “make a quiz from my folder Bio Unit 2”</li></ol>
-I follow set commands; I'm not a chatbot that understands everything.`;
-function startAI() {
-  if (state.aiStarted) return;
-  state.aiStarted = true;
-  addMsg('ai', `Hi! ${HELP}`);
-}
-async function runAI(text) {
-  addMsg('user', esc(text));
-  const cmd = parseCommand(text);
-  const L = state.profile.linked || {};
-  try {
-    switch (cmd.type) {
-      case 'help': addMsg('ai', HELP); break;
-      case 'error': addMsg('ai', esc(cmd.message)); break;
-      case 'log': {
-        const had = state.logs.some(l => l.id === `${cmd.category}_${cmd.date}`);
-        await saveLog(cmd.category, cmd.date, cmd.hours, cmd.rating);
-        const c = CATS[cmd.category];
-        addMsg('ai', `Done: logged ${esc(fmtHM(cmd.hours))} of ${esc(c.label.toLowerCase())} for ${esc(fmtDate(cmd.date))}${cmd.rating != null && c.ratingKey ? `, ${esc(c.ratingKey.toLowerCase())} ${cmd.rating}/10` : ''}.${had ? ' (This replaced your earlier entry for that day.)' : ''}`);
-        break;
-      }
-      case 'deadline': {
-        if (!cmd.date) { addMsg('ai', 'Which day is it due? Try: “add deadline Bio test on Friday at 3pm”.'); break; }
-        let note = '';
-        let gcal = false;
-        if (L.calendar) gcal = true;
-        try { await addDeadline({ title: cmd.title, date: cmd.date, time: cmd.time, gcal }); if (gcal) note = ' I also added it to your Google Calendar.'; }
-        catch (e) { if (!gcal) throw e; note = ` It's saved here, but I couldn't add it to Google Calendar (${esc(e.message)}).`; }
-        addMsg('ai', `Added “${esc(cmd.title)}” on ${esc(fmtDate(cmd.date))}${cmd.time ? ' at ' + esc(fmtTime12(cmd.time)) : ''}.${note}`);
-        break;
-      }
-      case 'list': {
-        const up = state.deadlines.filter(d => d.date >= todayISO()).slice(0, 8);
-        addMsg('ai', up.length ? `Coming up:<ol>${up.map(d => `<li>${esc(d.title)}: ${esc(fmtDate(d.date))}${d.time ? ' ' + esc(fmtTime12(d.time)) : ''}</li>`).join('')}</ol>` : 'No upcoming deadlines.');
-        break;
-      }
-      case 'summary': {
-        const lines = Object.entries(CATS).map(([k, c]) => {
-          const s = windowStats(state.logs.filter(l => l.category === k), 7, todayISO());
-          return s.count ? `<li>${esc(c.label)}: ${esc(fmtHM(s.avgHours))} per day over ${s.count} day${s.count > 1 ? 's' : ''}${s.avgRating != null ? `, average ${esc(c.ratingKey.toLowerCase())} ${s.avgRating.toFixed(1)}/10` : ''}</li>` : `<li>${esc(c.label)}: nothing logged in the last 7 days</li>`;
-        });
-        addMsg('ai', `Your last 7 days:<ol>${lines.join('')}</ol>`);
-        break;
-      }
-      case 'email': await handleEmail(cmd, L); break;
-      case 'quiz': await handleQuiz(cmd, L); break;
-      default: addMsg('ai', `I didn't understand that. ${HELP}`);
-    }
-  } catch (e) { addMsg('ai', `Something went wrong: ${esc(e.message || e)}`); }
-}
-async function handleEmail(cmd, L) {
-  if (!L.gmail) { addMsg('ai', 'Link Gmail in Settings first. I can only send, never read, your email.'); return; }
-  const to = cmd.to.toLowerCase();
-  if (!(state.profile.approved || []).includes(to)) {
-    addMsg('ai', `${esc(to)} isn't on your approved recipients list, so I won't email it. <button class="btn small" data-action="approve-addr" data-addr="${esc(to)}">Approve this address</button>`);
-    return;
-  }
-  addMsg('ai', `<div class="emailcard" data-to="${esc(to)}"><p><b>Draft email</b>: nothing is sent until you press Send.</p><p>To: ${esc(to)}</p>
-    <label>Subject<input name="subject" value="${esc(cmd.subject || 'Hello')}" maxlength="150"></label>
-    <label>Message<textarea name="body" rows="6" maxlength="3000">${esc(cmd.body)}</textarea></label>
-    <div class="row"><button class="primary" data-action="email-send">Send</button><button class="btn" data-action="email-cancel">Cancel</button></div></div>`);
-}
-async function handleQuiz(cmd, L) {
-  if (!L.drive) { addMsg('ai', 'Link Google Drive in Settings first.'); return; }
-  if (!cmd.folder) { addMsg('ai', 'Which folder? Try: “make a quiz from my folder Bio Unit 2”.'); return; }
-  addMsg('ai', `Looking for a folder named “${esc(cmd.folder)}”…`);
-  const folder = await G.findFolder(cmd.folder);
-  if (!folder) { addMsg('ai', `I couldn't find a folder named “${esc(cmd.folder)}”.`); return; }
-  const files = await G.listStudyFiles(folder.id);
-  if (!files.length) { addMsg('ai', `“${esc(folder.name)}” has no Google Docs or text files I can read.`); return; }
-  let text = '';
-  for (const f of files.slice(0, 5)) { text += '\n' + (await G.readFileText(f)); if (text.length > 80000) break; }
-  const qs = makeQuiz(text, cmd.count);
-  if (!qs.length) { addMsg('ai', 'I couldn\'t find enough full sentences in those files to make questions.'); return; }
-  const plain = qs.map((x, i) => `${i + 1}. ${x.q}`).join('\n') + '\n\nAnswers\n' + qs.map((x, i) => `${i + 1}. ${x.a}`).join('\n');
-  const url = URL.createObjectURL(new Blob([plain], { type: 'text/plain' }));
-  addMsg('ai', `Quiz from “${esc(folder.name)}” (${files.slice(0, 5).length} file${files.length > 1 ? 's' : ''}). Fill in the blanks:<ol>${qs.map(x => `<li>${esc(x.q)}</li>`).join('')}</ol><details><summary>Show answers</summary><ol>${qs.map(x => `<li>${esc(x.a)}</li>`).join('')}</ol></details><p class="muted">This is a simple fill-in-the-blank quiz built from your notes. Check it against your notes.</p><a class="btn small" href="${url}" download="hourglass-quiz.txt">Download as text</a>`);
+// ---------- Apple Calendar (free: a private subscription link) ----------
+function randomToken() { const b = new Uint8Array(24); crypto.getRandomValues(b); return [...b].map(x => x.toString(16).padStart(2, '0')).join(''); }
+async function calFeedUrl(proto = 'webcal') {
+  if (!state.profile.calToken) await patchProfile({ calToken: randomToken() });
+  return `${proto}://${location.host}/api/calendar?token=${state.profile.calToken}`;
 }
 
 // ---------- settings ----------
 function renderSettings() {
   const p = state.profile, L = p.linked || {};
   const theme = document.documentElement.dataset.theme;
+  const notes = AI.getNotes();
+  const status = lsGet('hg_research_status');
   $('#tab-settings').innerHTML = `
     <h2>Settings</h2>
     <div class="card"><h3>Appearance</h3><div class="seg" role="group" aria-label="Theme">
       <button class="${theme === 'light' ? 'on' : ''}" data-action="theme" data-t="light">Light</button>
       <button class="${theme === 'dark' ? 'on' : ''}" data-action="theme" data-t="dark">Dark</button></div></div>
 
-    <div class="card"><h3>Nightly reminder</h3>
-      <form data-form="reminder"><label for="s-time">Remind me to log my day at</label>
-        <div class="row"><input id="s-time" type="time" name="time" value="${esc(p.reminderTime || '20:30')}" required><button class="primary" style="margin-top:0">Save time</button></div></form>
-      <p class="muted">Free websites can't send background notifications, so pick what works for you:</p>
+    <div class="card"><h3>Your name</h3>
+      <form data-form="name"><label for="s-name">Used by the assistant to sign emails (for example "Priya Shah")</label>
+      <div class="row"><input id="s-name" name="name" maxlength="60" value="${esc(p.displayName || '')}" autocomplete="name"><button class="primary" style="margin-top:0">Save</button></div></form></div>
+
+    <div class="card"><h3>Reminder alerts</h3>
+      <p class="muted">Set as many as you like. The first one is your nightly reminder to log your sleep, homework/study time and free time.</p>
+      <form data-form="alerts">
+        ${state.alerts.map((a, i) => `<div class="alertrow"><input type="time" name="t${i}" value="${esc(a.time)}" aria-label="Alert time" required><input name="l${i}" value="${esc(a.label || '')}" maxlength="120" placeholder="Message" aria-label="Alert message"><button type="button" class="btn small danger" data-action="alert-del" data-i="${i}" aria-label="Remove alert">Remove</button></div>`).join('') || '<p class="muted">No alerts yet.</p>'}
+        <div class="row"><button type="button" class="btn" data-action="alert-add">+ Add an alert</button><button class="primary" style="margin-top:0">Save alerts</button></div>
+      </form>
       <div class="stack">
-        <button class="btn" data-action="ics">Add a daily reminder to my phone's calendar</button>
-        <button class="btn" data-action="notify">Turn on alerts while the app is open</button>
-        ${L.calendar ? '<button class="btn" data-action="gcal-reminder">Create or update the daily reminder in Google Calendar</button>' : ''}
+        ${state.pushOn
+          ? '<p class="okline">✓ Alerts are on for this device, even when the app is closed.</p><button class="btn" data-action="push-test">Send me a test alert</button>'
+          : '<button class="primary" data-action="push-on">Turn on alerts for this device</button>'}
+        ${isIOS() && !isStandalone() ? '<p class="muted">On iPhone, add Hourglass to your Home Screen first (Share → Add to Home Screen).</p>' : ''}
+        <button class="btn" data-action="ics">Also add the nightly reminder to my phone's calendar</button>
       </div></div>
 
     <div class="card"><h3>Linked Google accounts</h3>
-      <p class="muted">Optional. You choose what the assistant can reach, and can unlink any time.</p>
+      <p class="muted">Optional. Link these so the assistant can use them when it needs to. You can unlink any time.</p>
       ${Object.entries(SERVICES).map(([k, s]) => `<div class="logrow"><div><b>${esc(s.name)}</b><small>${esc(s.note)}</small></div>
         ${L[k] ? `<button class="btn small danger" data-action="unlink" data-svc="${k}">Unlink</button>` : `<button class="btn small" data-action="link" data-svc="${k}">Link</button>`}</div>`).join('')}
-      <p class="muted">You may be asked to confirm with Google again each hour or so. That's normal.</p></div>
+      <p class="muted">Google may ask you to confirm again about once an hour. That's normal.</p></div>
 
-    <div class="card"><h3>Approved email recipients</h3>
-      <p class="muted">The assistant can only draft emails to these addresses (for example a teacher or mentor).</p>
-      ${(p.approved || []).map(a => `<div class="logrow"><span>${esc(a)}</span><button class="btn small danger" data-action="del-approved" data-addr="${esc(a)}">Remove</button></div>`).join('') || ''}
-      <form data-form="recipient"><label for="s-addr">Add an address</label><div class="row"><input id="s-addr" type="email" name="addr" required><button class="primary" style="margin-top:0">Add</button></div></form></div>
+    <div class="card"><h3>Apple Calendar (iPhone, iPad, Mac)</h3>
+      <p class="muted">Free. Your Hourglass deadlines show up in Apple Calendar and update by themselves, with an alert the day before.</p>
+      <div class="stack"><button class="btn" data-action="apple-sub">Subscribe on this device</button><button class="btn" data-action="apple-copy">Copy the calendar link</button></div>
+      <details><summary>How to add it by hand</summary><p class="muted">On iPhone: Settings → Apps → Calendar → Calendar Accounts → Add Account → Other → Add Subscribed Calendar, then paste the link. Keep the link private: anyone with it can see your deadlines.</p></details></div>
+
+    <div class="card"><h3>What the assistant remembers</h3>
+      ${notes.length ? notes.map((n, i) => `<div class="logrow"><span>${esc(n)}</span><button class="btn small danger" data-action="note-del" data-i="${i}">Forget</button></div>`).join('') : '<p class="muted">Nothing yet. It saves short notes as it learns how you work.</p>'}
+      <button class="btn" data-action="ai-new" style="margin-top:10px">Start a new chat</button></div>
 
     <div class="card"><h3>Change password</h3>
       <form data-form="password" autocomplete="off">
@@ -526,8 +547,8 @@ function renderSettings() {
 
     <div class="card"><h3>Research sharing</h3>
       <p>${p.consent ? 'You agreed to share your logs for research, under a random study code.' : 'You are not sharing data for research.'}</p>
-      <p class="muted">Your study code: <b>${esc(p.participantCode)}</b> (used instead of your name or User ID).</p>
-      ${p.consent ? '<button class="btn danger" data-action="research-stop">Stop sharing and remove my rows from the study sheet</button>' : '<button class="btn" data-action="research-start">I agree to share my logs for research</button>'}</div>
+      <p class="muted">Your study code: <b>${esc(p.participantCode)}</b> (used instead of your name or User ID).${p.consent && status ? ` Last sync: ${esc(status)}.` : ''}</p>
+      ${p.consent ? '<button class="btn" data-action="research-stop">Stop sharing new logs</button>' : '<button class="btn" data-action="research-start">I agree to share my logs for research</button>'}</div>
 
     <div class="card"><h3>Account</h3>
       <p class="muted">Signed in as <b>${esc(p.userId)}</b></p>
@@ -535,39 +556,43 @@ function renderSettings() {
 }
 
 async function stopResearch() {
-  if (!confirm('Stop sharing and remove all your rows from the study spreadsheet?')) return;
+  if (!confirm('Stop sharing new logs for research? Logs you already shared stay in the study, anonymously.')) return;
   localStorage.removeItem(qKey());
   await patchProfile({ consent: false });
-  sendResearch({ action: 'withdraw' }, { force: true });
-  toast('Sharing stopped. Your rows will be removed from the study sheet.');
+  toast('Sharing stopped. New logs will stay private.');
   renderSettings();
 }
 async function startResearch() {
   const yes = await askConsent();
   if (!yes) return;
   await patchProfile({ consent: true });
+  sendResearch({ action: 'consent' });
   state.logs.forEach(l => sendResearch({ action: 'upsert', category: l.category, date: l.date, hours: l.hours, rating: l.rating ?? null }));
   toast('Thank you. Sharing is on.');
   renderSettings();
 }
+// Deletes everything in the app. Rows already in the research spreadsheet are not touched.
 async function deleteAccount() {
-  const pw = await askPassword('Delete your account?', 'This permanently deletes your logs, deadlines and account. It cannot be undone. Enter your password to continue.');
+  const pw = await askPassword('Delete your account?', 'This permanently deletes your logs, deadlines, chats, reminders and account from Hourglass. It cannot be undone. Enter your password to continue.');
   if (!pw) return;
   const user = state.user;
   await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, pw));
-  const consented = state.profile.consent;
-  const refs = [logsCol(), dlCol()];
-  const docRef = uref();
+  const uid = user.uid;
   stopListeners();
-  if (consented) { localStorage.removeItem(qKey()); sendResearch({ action: 'withdraw' }, { force: true }); await flushQueue(); }
-  for (const col of refs) {
-    const snap = await getDocs(col);
+  localStorage.removeItem(qKey());
+  for (const name of ['logs', 'deadlines', 'ai', 'emails']) {
+    const snap = await getDocs(collection(db, 'users', uid, name));
     let batch = writeBatch(db), n = 0;
     for (const d of snap.docs) { batch.delete(d.ref); if (++n % 400 === 0) { await batch.commit(); batch = writeBatch(db); } }
     await batch.commit();
   }
-  await deleteDoc(docRef);
+  await deleteDoc(doc(db, 'push', uid)).catch(() => {});
+  await deleteDoc(doc(db, 'usage', uid)).catch(() => {});
+  await deleteDoc(doc(db, 'users', uid));
+  try { const reg = await navigator.serviceWorker?.getRegistration(); const s = await reg?.pushManager.getSubscription(); await s?.unsubscribe(); } catch {}
+  G.forgetAllTokens();
   await deleteUser(user);
+  toast('Your account and app data were deleted.');
 }
 
 // ---------- actions (buttons) ----------
@@ -578,8 +603,7 @@ const actions = {
   'del-log': async b => {
     const l = state.logs.find(x => x.id === b.dataset.id);
     if (!l || !confirm(`Delete the ${CATS[l.category].label.toLowerCase()} log for ${fmtDate(l.date)}?`)) return;
-    await deleteDoc(doc(logsCol(), l.id));
-    sendResearch({ action: 'delete', category: l.category, date: l.date });
+    await deleteLog(l);
     toast('Log deleted.');
   },
   'cal-prev': () => { state.calMonth = new Date(state.calMonth.getFullYear(), state.calMonth.getMonth() - 1, 1); renderCalendar(); },
@@ -591,23 +615,25 @@ const actions = {
     if (!d || !confirm(`Delete “${d.title}”?`)) return;
     await deleteDoc(doc(dlCol(), d.id));
   },
-  chip: b => { const i = $('#tab-ai input[name=q]'); i.value = b.dataset.text; i.focus(); },
+  chip: b => { const i = $('#tab-ai textarea[name=q]'); i.value = b.dataset.text; i.focus(); },
   theme: async b => { applyTheme(b.dataset.t); await patchProfile({ theme: b.dataset.t }); renderSettings(); },
-  ics: () => downloadReminderICS(state.profile.reminderTime || '20:30'),
-  notify: async () => {
-    if (!('Notification' in window)) return toast('This browser does not support notifications.');
-    const r = await Notification.requestPermission();
-    toast(r === 'granted' ? 'Alerts on. They only appear while the app is open.' : 'Notifications were not allowed.');
+  ics: () => downloadReminderICS(state.alerts[0]?.time || DEFAULT_ALERT.time),
+  'push-on': enablePush,
+  'push-test': testPush,
+  'alert-add': () => { readAlertForm(); state.alerts.push({ time: '07:00', label: '' }); renderSettings(); },
+  'alert-del': async b => { readAlertForm(); state.alerts.splice(+b.dataset.i, 1); await saveAlerts(state.alerts); toast('Alert removed.'); },
+  'close-modal': closeModal,
+  'apple-sub': async () => { location.href = await calFeedUrl('webcal'); },
+  'apple-copy': async () => {
+    const url = await calFeedUrl('https');
+    try { await navigator.clipboard.writeText(url); toast('Link copied. Keep it private.'); } catch { prompt('Copy this link:', url); }
   },
-  'gcal-reminder': async () => {
-    const id = await G.upsertDailyReminder(state.profile.reminderTime || '20:30', state.profile.reminderEventId);
-    await patchProfile({ reminderEventId: id });
-    toast('Daily reminder saved in Google Calendar.');
-  },
+  'note-del': async b => { await AI.removeNote(+b.dataset.i); renderSettings(); },
   link: async b => {
     await G.getToken(b.dataset.svc);
     await patchProfile({ linked: { ...(state.profile.linked || {}), [b.dataset.svc]: true } });
     toast(`${SERVICES[b.dataset.svc].name} linked.`);
+    if (b.dataset.svc === 'gmail') AI.startReplyWatch();
     renderSettings();
   },
   unlink: async b => {
@@ -615,35 +641,17 @@ const actions = {
     await patchProfile({ linked: { ...(state.profile.linked || {}), [b.dataset.svc]: false } });
     renderSettings();
   },
-  'del-approved': async b => { await patchProfile({ approved: (state.profile.approved || []).filter(a => a !== b.dataset.addr) }); renderSettings(); },
-  'approve-addr': async b => {
-    const a = b.dataset.addr;
-    await patchProfile({ approved: [...new Set([...(state.profile.approved || []), a])] });
-    b.disabled = true;
-    addMsg('ai', `${esc(a)} is approved. Ask me again to draft the email.`);
-  },
-  'email-send': async b => {
-    const card = b.closest('.emailcard');
-    const to = card.dataset.to;
-    const subject = card.querySelector('[name=subject]').value.trim();
-    const body = card.querySelector('[name=body]').value.trim();
-    if (!subject || !body) return toast('Add a subject and a message first.');
-    if (!(state.profile.approved || []).includes(to)) return toast('That address is no longer approved.');
-    card.querySelectorAll('button').forEach(x => (x.disabled = true));
-    try {
-      await G.sendEmail({ to, subject, body });
-      card.innerHTML = `<p>Sent to ${esc(to)}.</p>`;
-    } catch (e) {
-      card.querySelectorAll('button').forEach(x => (x.disabled = false));
-      throw e;
-    }
-  },
-  'email-cancel': b => { b.closest('.emailcard').innerHTML = '<p>Draft cancelled. Nothing was sent.</p>'; },
   'research-stop': stopResearch,
   'research-start': startResearch,
-  logout: () => signOut(auth),
-  'delete-account': deleteAccount
+  logout: () => { G.forgetAllTokens(); signOut(auth); },
+  'delete-account': deleteAccount,
+  ...AI.aiActions
 };
+function readAlertForm() {
+  const f = $('form[data-form="alerts"]');
+  if (!f) return;
+  state.alerts = state.alerts.map((a, i) => ({ time: f[`t${i}`]?.value || a.time, label: f[`l${i}`]?.value.trim() ?? a.label }));
+}
 
 document.addEventListener('click', async e => {
   const tab = e.target.closest('[data-tab]');
@@ -676,12 +684,8 @@ const forms = {
     f.title.value = ''; f.time.value = '';
     toast(msg);
   },
-  reminder: async f => { await patchProfile({ reminderTime: f.time.value }); localStorage.removeItem('hg_notified_' + todayISO()); toast('Reminder time saved.'); },
-  recipient: async f => {
-    const a = f.addr.value.trim().toLowerCase();
-    await patchProfile({ approved: [...new Set([...(state.profile.approved || []), a])] });
-    renderSettings();
-  },
+  name: async f => { await patchProfile({ displayName: f.name.value.trim() }); toast('Name saved.'); },
+  alerts: async f => { readAlertForm(); await saveAlerts(state.alerts); toast(state.pushOn ? 'Alerts saved.' : 'Alerts saved. Turn on alerts for this device to get them.'); },
   password: async f => {
     if (f.nw.value.length < 8) return toast('New password must be at least 8 characters.');
     if (f.nw.value !== f.nw2.value) return toast('The new passwords do not match.');
@@ -692,7 +696,7 @@ const forms = {
       toast('Password changed.');
     } catch (e) { toast(e.code === 'auth/invalid-credential' || e.code === 'auth/wrong-password' ? 'Your current password is wrong.' : 'Could not change the password.'); }
   },
-  ai: async f => { const t = f.q.value.trim(); f.q.value = ''; if (t) await runAI(t); }
+  ai: async f => { const t = f.q.value.trim(); f.q.value = ''; f.q.style.height = ''; if (t) await AI.ask(t); }
 };
 document.addEventListener('submit', async e => {
   const f = e.target.closest('form[data-form]');
@@ -701,3 +705,11 @@ document.addEventListener('submit', async e => {
   try { await forms[f.dataset.form](f); } catch (err) { toast(err.message || 'Something went wrong.'); }
 });
 document.addEventListener('change', e => { if (e.target.id === 'f-date') prefillLog(); });
+// Chat box: Enter sends, Shift+Enter makes a new line; the box grows as you type.
+document.addEventListener('keydown', e => {
+  if (e.target.matches('#tab-ai textarea[name=q]') && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); e.target.form.requestSubmit(); }
+});
+document.addEventListener('input', e => {
+  if (e.target.matches('#tab-ai textarea[name=q]')) { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px'; }
+});
+window.addEventListener('online', () => state.user && flushQueue());

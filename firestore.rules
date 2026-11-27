@@ -26,6 +26,25 @@ service cloud.firestore {
       match /deadlines/{dlId} {
         allow read, write: if isOwner(uid);
       }
+
+      // AI chat history, saved notes about the student, and emails the AI is watching for replies.
+      match /ai/{docId} {
+        allow read, write: if isOwner(uid);
+      }
+      match /emails/{emailId} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+
+    // Reminder alert times and this person's devices for push notifications.
+    // The server (Vercel) reads these with admin access to send alerts.
+    match /push/{uid} {
+      allow read, write: if isOwner(uid);
+    }
+
+    // AI usage counter: written only by the server.
+    match /usage/{uid} {
+      allow read, delete: if isOwner(uid);
     }
   }
 }
