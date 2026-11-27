@@ -4,7 +4,7 @@
  * It receives logs from consenting students and writes them to the "Logs" sheet, using a random
  * study code (never a User ID, name or email).
  */
-const STUDY_KEY = 'CHANGE_ME_TO_A_RANDOM_STRING'; // must match STUDY_KEY in app/config.js
+const STUDY_KEY = '9837rjc9urnc834rny987c49c08n30c98038ch7fa'; // must match STUDY_KEY in app/config.js
 
 const SHEET_NAME = 'Logs';
 const HEADERS = ['Participant code', 'Category', 'Date', 'Hours', 'Rating (sleepiness or productivity)', 'Last updated'];
