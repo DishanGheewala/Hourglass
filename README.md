@@ -7,7 +7,7 @@
 - **Calendar** of deadlines, synced to Google Calendar and subscribable from Apple Calendar.
 - **AI assistant** (Claude) that chats normally, learns your habits, writes polished emails, summarizes Gmail,
   tells you when someone replies, makes study guides and quizzes from any Google Drive file, and sets deadlines.
-- **Reminder alerts** at as many times as you like, delivered even when the app is closed.
+- **Reminder alerts** at as many times as you like, delivered even when the app is closed (optional setup).
 - **Settings**: light/dark mode, password, your name, Google linking, alerts, research sharing, delete account.
 - **Research**: with consent, anonymous logs go to a Google Sheet in the project owner's Drive.
 

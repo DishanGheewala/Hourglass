@@ -2,7 +2,7 @@
 // The browser runs the tool loop (its tools use the student's own Firestore data and Google sign-in),
 // and this function only adds the secret API key, the fixed system prompt and the tool list.
 import Anthropic from '@anthropic-ai/sdk';
-import { admin, requireUser, sendError, readJson } from './_lib.js';
+import { admin, hasAdmin, requireUser, sendError, readJson } from './_lib.js';
 import { FieldValue } from 'firebase-admin/firestore';
 
 export const config = { maxDuration: 120 };
@@ -208,6 +208,7 @@ const TOOLS = [
 ];
 
 async function countUsage(uid) {
+  if (!hasAdmin()) return true; // the daily limit needs the optional service account
   const { db } = admin();
   const day = new Date().toISOString().slice(0, 10);
   const ref = db.doc(`usage/${uid}`);
@@ -224,7 +225,7 @@ async function countUsage(uid) {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
   try {
-    if (!process.env.ANTHROPIC_API_KEY) throw Object.assign(new Error('The AI is not set up yet: add ANTHROPIC_API_KEY in Vercel (SETUP.md, step 4).'), { status: 503 });
+    if (!process.env.ANTHROPIC_API_KEY) throw Object.assign(new Error('The AI is not set up yet: add ANTHROPIC_API_KEY in Vercel (SETUP.md, step 3).'), { status: 503 });
     const user = await requireUser(req);
     const { messages } = await readJson(req);
     if (!Array.isArray(messages) || !messages.length) throw Object.assign(new Error('No messages.'), { status: 400 });

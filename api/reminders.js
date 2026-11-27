@@ -29,7 +29,7 @@ export default async function handler(req, res) {
     const vapidDetails = { subject: VAPID_SUBJECT || 'mailto:admin@example.com', publicKey: VAPID_PUBLIC_KEY, privateKey: VAPID_PRIVATE_KEY };
 
     const { db } = admin();
-    const snap = await db.collection('push').get();
+    const snap = await db.collection('users').select('alerts', 'subs', 'tz', 'sent').get();
     let sent = 0;
     for (const doc of snap.docs) {
       const d = doc.data();

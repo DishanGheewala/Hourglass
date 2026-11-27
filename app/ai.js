@@ -1,6 +1,6 @@
 // The Hourglass assistant: a Claude-powered chat that can use the student's data and linked Google accounts.
 // The conversation and the notes it learns are saved in Firestore so it remembers across sessions.
-import { doc, getDoc, setDoc, collection, addDoc, getDocs, updateDoc, query, where, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+import { doc, getDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 import * as G from './google.js';
 import { esc, todayISO, addDays, fmtDate, fmtHM, fmtTime12 } from './util.js';
 
@@ -18,7 +18,15 @@ let replyTimer = null;
 
 const chatRef = () => doc(D.db, 'users', D.state.user.uid, 'ai', 'chat');
 const memRef = () => doc(D.db, 'users', D.state.user.uid, 'ai', 'memory');
-const emailsCol = () => collection(D.db, 'users', D.state.user.uid, 'emails');
+// If the database rules for chat storage are not published yet, the chat is kept on this device instead.
+const localKey = () => 'hg_ai_' + D.state.user.uid;
+function localSave() { try { localStorage.setItem(localKey(), JSON.stringify({ messages: chat.messages, display: chat.display, pending: chat.pending, notes })); } catch {} }
+function localLoad() {
+  try {
+    const l = JSON.parse(localStorage.getItem(localKey()) || 'null');
+    if (l) { chat = { messages: l.messages || [], display: l.display || [], pending: l.pending || [] }; notes = l.notes || []; }
+  } catch {}
+}
 
 export function initAI(deps) { D = deps; }
 
@@ -38,7 +46,7 @@ export async function loadAI() {
       chat.pending = d.pending || [];
     }
     if (m.exists()) notes = m.data().notes || [];
-  } catch (e) { console.warn('Could not load chat', e); }
+  } catch (e) { console.warn('Could not load chat from the database, using this device', e); localLoad(); }
   if (!chat.display.length) chat.display.push({ kind: 'ai', text: GREETING });
   render();
   startReplyWatch();
@@ -51,9 +59,12 @@ export function resetAI() {
 async function saveChat() {
   try {
     await setDoc(chatRef(), { messages: JSON.stringify(chat.messages), display: JSON.stringify(chat.display), pending: chat.pending, updatedAt: serverTimestamp() });
-  } catch (e) { console.warn('Could not save chat', e); }
+  } catch (e) { console.warn('Could not save chat to the database, keeping it on this device', e); localSave(); }
 }
-const saveNotes = () => setDoc(memRef(), { notes, updatedAt: serverTimestamp() });
+async function saveNotes() {
+  try { await setDoc(memRef(), { notes, updatedAt: serverTimestamp() }); }
+  catch (e) { console.warn('Could not save notes to the database, keeping them on this device', e); localSave(); }
+}
 export async function newChat() {
   chat = { messages: [], display: [{ kind: 'ai', text: GREETING }], pending: [] };
   await saveChat();
@@ -129,10 +140,16 @@ function quizHTML(it, i) {
 function render() {
   const log = $('#ai-log');
   if (!log) return;
-  log.innerHTML = chat.display.map(itemHTML).join('') + (busy ? '<div class="msg status" id="ai-working">Thinking…</div>' : '');
+  const suggest = !busy && chat.display.length <= 1 ? `<div class="suggest">${[
+    ['How did I sleep this week, and what should I change?', 'How is my sleep?'],
+    ['Help me plan my study time for my upcoming deadlines.', 'Plan my week'],
+    ['Summarize my unread emails from the last 3 days.', 'Summarize my emails'],
+    ['Make me a practice quiz from my notes in Google Drive.', 'Quiz me from Drive']
+  ].map(([t, l]) => `<button class="chip" data-action="chip" data-text="${esc(t)}">${esc(l)}</button>`).join('')}</div>` : '';
+  log.innerHTML = chat.display.map(itemHTML).join('') + suggest + (busy ? '<div class="msg status" id="ai-working"><span class="typing"><i></i><i></i><i></i></span> <span id="ai-wtext"></span></div>' : '');
   log.scrollTop = log.scrollHeight;
 }
-function setWorking(text) { const w = $('#ai-working'); if (w) w.textContent = text; }
+function setWorking(text) { const w = $('#ai-wtext'); if (w) w.textContent = text; }
 function show(item) { chat.display.push(item); render(); }
 
 // ---------- context sent with each message ----------
@@ -345,7 +362,10 @@ export const aiActions = {
     try {
       const r = await G.sendEmail({ ...draft, replyToId: it.replyToId });
       Object.assign(it, draft, { status: 'sent' });
-      await addDoc(emailsCol(), { threadId: r.threadId, to: draft.to, subject: draft.subject, sentAt: Date.now(), seen: [r.id] });
+      try { // remember the thread so we can tell the student when someone replies (stored on their profile)
+        const watched = [...(D.state.profile.watched || []), { threadId: r.threadId, to: draft.to, subject: draft.subject, sentAt: Date.now(), seen: [r.id] }].slice(-30);
+        await D.patchProfile({ watched });
+      } catch (err) { console.warn('Could not watch for replies', err); }
       chat.pending.push(`The student pressed Send: the email "${draft.subject}" to ${draft.to} was sent${draft.body !== it.body ? ' (after their edits)' : ''}.`);
       render(); await saveChat();
       startReplyWatch();
@@ -388,10 +408,9 @@ async function checkReplies() {
   try {
     const me = await G.myEmail();
     const since = Date.now() - 30 * 86400000;
-    const snap = await getDocs(query(emailsCol(), where('sentAt', '>=', since)));
-    let found = 0;
-    for (const d of snap.docs) {
-      const e = d.data();
+    const watched = (D.state.profile.watched || []).filter(w => w.sentAt >= since);
+    let found = 0, changed = false;
+    for (const e of watched) {
       if (!e.threadId) continue;
       const msgs = await G.gmailThread(e.threadId);
       const seen = new Set(e.seen || []);
@@ -404,8 +423,9 @@ async function checkReplies() {
         found++;
         D.notify(`${emailOnly(m.from)} responded to your email`, body.slice(0, 140));
       }
-      if (fresh.length || seen.size !== (e.seen || []).length) await updateDoc(d.ref, { seen: [...seen] });
+      if (seen.size !== (e.seen || []).length) { e.seen = [...seen]; changed = true; }
     }
+    if (changed) await D.patchProfile({ watched });
     if (found) { render(); await saveChat(); D.markAI(); }
   } catch (e) { console.warn('Reply check failed', e); } finally { checking = false; }
 }

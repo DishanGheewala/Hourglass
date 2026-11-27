@@ -1,29 +1,30 @@
-// Shared server helpers for the Vercel functions in /api.
-// Files starting with "_" are not turned into endpoints by Vercel.
+// Shared server helpers for the Vercel functions in /api (files starting with "_" are not endpoints).
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 
-// FIREBASE_SERVICE_ACCOUNT holds the whole service-account JSON (SETUP.md, step 4).
+export const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'hourglass-4f6f9';
+
+// Full admin access (needed only for push alerts and the AI daily limit). Optional.
+export const hasAdmin = () => !!process.env.FIREBASE_SERVICE_ACCOUNT;
 export function admin() {
-  if (!getApps().length) {
-    const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
-    if (!raw) throw new Error('FIREBASE_SERVICE_ACCOUNT is not set in Vercel.');
-    initializeApp({ credential: cert(JSON.parse(raw)) });
-  }
-  return { auth: getAuth(), db: getFirestore() };
+  if (!hasAdmin()) throw Object.assign(new Error('Alerts need FIREBASE_SERVICE_ACCOUNT in Vercel (SETUP.md, step 5).'), { status: 503 });
+  let app = getApps().find(a => a.name === '[DEFAULT]');
+  if (!app) app = initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
+  return { auth: getAuth(app), db: getFirestore(app) };
 }
 
-// Checks the Firebase ID token the browser sends as "Authorization: Bearer <token>".
+// Checks the Firebase sign-in token the browser sends. Needs no secret: only the public project id.
+function verifier() {
+  const app = getApps().find(a => a.name === 'hg-verify') || initializeApp({ projectId: PROJECT_ID }, 'hg-verify');
+  return getAuth(app);
+}
 export async function requireUser(req) {
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : '';
   if (!token) throw Object.assign(new Error('Not signed in.'), { status: 401 });
-  try {
-    return await admin().auth.verifyIdToken(token);
-  } catch {
-    throw Object.assign(new Error('Your sign-in expired. Refresh the page.'), { status: 401 });
-  }
+  try { return await verifier().verifyIdToken(token); }
+  catch (e) { console.error('verifyIdToken', e.code || e.message); throw Object.assign(new Error('Your sign-in expired. Refresh the page.'), { status: 401 }); }
 }
 
 export function sendError(res, err) {
