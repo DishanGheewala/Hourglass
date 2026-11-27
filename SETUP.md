@@ -7,7 +7,7 @@ Most of the app works as soon as it is deployed. These steps switch on the rest.
 | Log in, logging, graphs, calendar, settings | Step 1 (already done if you could log in) |
 | Apple Calendar link, saved AI chats | Step 1.4 (publish the rules) |
 | Data going to your spreadsheet | Step 2 |
-| AI assistant | Step 3 (free key) |
+| AI assistant | Nothing (free on-device AI); step 3 for the full AI |
 | Gmail / Calendar / Drive linking | Step 4 |
 | Alerts when the app is closed | Step 5 (optional) |
 
@@ -35,20 +35,20 @@ name or email. Rows are never deleted: deleting a log marks its row "Deleted in 
 an account leaves existing rows alone. Logs saved before the sheet worked are sent the next time each consenting
 student opens the app.
 
-## 3. AI assistant (free option)
-Add ONE of these in Vercel: project → **Settings → Environment Variables** (Production), then **Deployments → ⋯ → Redeploy**.
+## 3. AI assistant
+**With no setup at all**, the AI tab uses a free on-device AI: a small model that runs privately inside the student's own browser
+(no account, no key, no cost, chats never leave the device). The first time, it asks to download about 1 GB, so use Wi-Fi.
+It needs a recent Chrome or Edge (computer or newer Android phone). It is simpler than the full AI: it chats, logs time,
+adds deadlines, sets reminders, remembers things, makes short quizzes, and drafts emails, but its answers are less reliable,
+and it only sees the start of long Drive files.
 
-**Free: `GEMINI_API_KEY`.** Go to https://aistudio.google.com/apikey, sign in with Google, click **Create API key**. No credit card is needed.
-Free keys have a per-minute limit, so the assistant may say "busy, try again in a minute" when several students use it at once.
-`GEMINI_MODEL` is optional (default `gemini-2.5-flash`); set it if Google retires that name.
-Important: Google's terms for free Gemini keys may let Google use the chats to improve its products, and may restrict
-apps aimed at under-18s. Read https://ai.google.dev/gemini-api/terms before real students use the AI, and tell
-them not to type private information into it.
-
-**Paid (better answers): `ANTHROPIC_API_KEY`.** From console.anthropic.com → API keys, with credit added. If both keys
-are set, Anthropic is used. Optional: `AI_MODEL` (default `claude-opus-5-5`) and `AI_DAILY_LIMIT` (needs step 5's service account).
-
-The free Gemini option cannot search the web; everything else (emails, Drive study material, quizzes, deadlines, memory) works.
+**Optional upgrade (needs an adult, 18+, to create the key):** add ONE of these in Vercel: project → **Settings → Environment
+Variables** (Production), then **Deployments → ⋯ → Redeploy**. When a key is present the app uses it automatically.
+- Free: `GEMINI_API_KEY` from https://aistudio.google.com/apikey (an adult's Google account). Free keys have a per-minute limit,
+  can't search the web, and Google's terms for free keys may let it use chats and may restrict apps for under-18s: read
+  https://ai.google.dev/gemini-api/terms first. `GEMINI_MODEL` is optional (default `gemini-2.5-flash`).
+- Paid, best answers: `ANTHROPIC_API_KEY` (console.anthropic.com, with credit added). If both are set, Anthropic is used.
+  Optional `AI_MODEL` (default `claude-opus-5-5`) and `AI_DAILY_LIMIT` (needs step 5's service account).
 
 ## 4. Link Gmail, Google Calendar and Drive
 1. console.cloud.google.com → your project → **APIs & Services → Library**: enable **Google Calendar API**, **Gmail API**, **Google Drive API**.

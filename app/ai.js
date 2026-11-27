@@ -2,6 +2,7 @@
 // The conversation and the notes it learns are saved in Firestore so it remembers across sessions.
 import { doc, getDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 import * as G from './google.js';
+import * as Local from './local-ai.js';
 import { esc, todayISO, addDays, fmtDate, fmtHM, fmtTime12 } from './util.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -183,6 +184,15 @@ function contextText() {
 const needs = svc => { if (!D.state.profile?.linked?.[svc]) throw new Error(`${{ gmail: 'Gmail', drive: 'Google Drive', calendar: 'Google Calendar' }[svc]} is not linked. The student can link it in Settings.`); };
 const validDate = d => { if (!/^\d{4}-\d{2}-\d{2}$/.test(d || '')) throw new Error('Date must be YYYY-MM-DD.'); return d; };
 
+// Makes sure every email has a greeting and a closing with the student's name, whichever AI wrote it.
+function polishEmail(body) {
+  let b = String(body || '').trim();
+  const name = (D.state.profile?.displayName || '').trim();
+  if (!/^(dear|hi|hello|hey|good (morning|afternoon|evening))\b/i.test(b)) b = 'Hello,\n\n' + b;
+  if (!/(best regards|kind regards|regards|sincerely|best wishes|thank you|thanks|cheers)[,.!]?\s*[\s\S]{0,60}$/i.test(b.slice(-160))) b += '\n\nBest regards,' + (name ? '\n' + name : '');
+  return b;
+}
+
 const TOOLS = {
   async log_time({ category, date, hours, rating }) {
     validDate(date);
@@ -249,6 +259,7 @@ const TOOLS = {
   async gmail_read({ message_id }) { needs('gmail'); setWorking('Reading an email…'); return G.gmailRead(message_id); },
   async draft_email({ to, cc, subject, body, reply_to_message_id }) {
     needs('gmail');
+    body = polishEmail(body);
     show({ kind: 'draft', to, cc: cc || '', subject, body, replyToId: reply_to_message_id || null, status: 'draft' });
     return { shown_to_student: true, note: 'The student will review it and press Send. It has not been sent yet.' };
   },
@@ -291,14 +302,44 @@ async function runTool(block) {
 }
 
 // ---------- the conversation loop ----------
-async function callModel() {
+// Which AI answers: the cloud AI when the server has a key, otherwise the free on-device AI.
+let useLocal = false;
+async function callServer() {
   const token = await D.state.user.getIdToken();
   const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ messages: chat.messages }) });
   let data = {};
   try { data = await res.json(); } catch {}
-  if (res.status === 503 && /not set up/i.test(data.error || '')) throw new Error("The AI assistant isn't switched on yet. Everything else in Hourglass works. Ask the app's owner to enable it.");
-  if (!res.ok) throw new Error(data.error || (res.status === 404 ? 'The AI server is not deployed yet (see SETUP.md, step 4).' : `The AI server returned ${res.status}.`));
+  if ((res.status === 503 && /not set up/i.test(data.error || '')) || res.status === 404) throw Object.assign(new Error('not set up'), { notSetUp: true });
+  if (!res.ok) throw new Error(data.error || `The AI server returned ${res.status}.`);
   return data;
+}
+async function callLocal() {
+  if (!Local.supported()) throw new Error("This browser can't run the free on-device AI (it needs WebGPU). Try Chrome or Edge on a computer or a recent Android phone, or ask the app's owner to switch on the full AI.");
+  if (!Local.isReady()) {
+    if (localStorage.getItem('hg_local_ready') !== '1' && !confirm('The free AI runs privately on your device. It needs a one-time download of about 1 GB (use Wi-Fi) and is simpler than the full AI. Download it now?')) {
+      throw new Error('No problem. The AI stays off until you allow the download.');
+    }
+    setWorking('Starting the on-device AI…');
+    await Local.load(r => setWorking(`Downloading the AI… ${Math.round((r.progress || 0) * 100)}%`));
+    try { localStorage.setItem('hg_local_ready', '1'); } catch {}
+  }
+  if (!chat.display.some(d => d.kind === 'status' && /on-device/.test(d.text || ''))) show({ kind: 'status', text: 'Using the free on-device AI: private, but simpler than the full AI.' });
+  setWorking('Thinking…');
+  const raw = await Local.generate(Local.buildPrompt(chat.messages, D.state.profile?.linked || {}), {
+    onToken: t => setWorking(`Writing… ${t.trim().split(/\s+/).length} words`)
+  });
+  const { text, calls } = Local.parseOutput(raw);
+  const content = [];
+  if (text) content.push({ type: 'text', text });
+  for (const c of calls) content.push({ type: 'tool_use', id: 'call_' + Math.random().toString(36).slice(2, 12), name: c.name, input: c.input });
+  return { content, stop_reason: calls.length ? 'tool_use' : 'end_turn', stop_details: null };
+}
+async function callModel() {
+  if (!useLocal) {
+    try { return await callServer(); }
+    catch (e) { if (!e.notSetUp) throw e; useLocal = true; }
+  }
+  return callLocal();
 }
 
 export async function ask(text) {
@@ -318,7 +359,7 @@ export async function ask(text) {
   render();
   let ok = false;
   try {
-    for (let step = 0; step < MAX_STEPS; step++) {
+    for (let step = 0; step < (useLocal ? 6 : MAX_STEPS); step++) {
       const r = await callModel();
       const content = r.content?.length ? r.content : [{ type: 'text', text: '…' }];
       chat.messages.push({ role: 'assistant', content });
