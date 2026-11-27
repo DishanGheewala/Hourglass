@@ -581,7 +581,8 @@ function renderSettings() {
   const p = state.profile, L = p.linked || {};
   const theme = document.documentElement.dataset.theme;
   const notes = AI.getNotes();
-  const status = lsGet('hg_research_status');
+  const admin = new URLSearchParams(location.search).has('admin'); // owner-only diagnostics
+  const status = admin ? lsGet('hg_research_status') : null;
   $('#tab-settings').innerHTML = `
     <div class="pagehead"><span class="ico">${ic('set')}</span><div><h2>Settings</h2><p>Signed in as @${esc(p.userId)}</p></div></div>
 
@@ -632,7 +633,7 @@ function renderSettings() {
     <div class="card"><h3>Research sharing</h3>
       <p>${p.consent ? 'You agreed to share your logs for research, under a random study code.' : 'You are not sharing data for research.'}</p>
       <p class="muted">Your study code: <b>${esc(p.participantCode)}</b> (used instead of your name or User ID).${p.consent && status ? ` Last sync: ${esc(status)}.` : ''}</p>
-      <div class="stack">${p.consent ? '<button class="btn" data-action="research-test">Test the spreadsheet connection</button><button class="btn" data-action="research-stop">Stop sharing new logs</button>' : '<button class="btn" data-action="research-start">I agree to share my logs for research</button>'}</div></div>
+      <div class="stack">${p.consent ? `${admin ? '<button class="btn" data-action="research-test">Test the spreadsheet connection</button>' : ''}<button class="btn" data-action="research-stop">Stop sharing new logs</button>` : '<button class="btn" data-action="research-start">I agree to share my logs for research</button>'}</div></div>
     <div class="card"><h3>Account</h3>
       <div class="stack"><button class="btn" data-action="logout">Log out</button><button class="btn danger" data-action="delete-account">Delete my account and data</button></div></div>`;
 }
