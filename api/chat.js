@@ -4,6 +4,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { admin, hasAdmin, requireUser, sendError, readJson } from './_lib.js';
 import { FieldValue } from 'firebase-admin/firestore';
+import { geminiChat } from './_gemini.js';
 
 export const config = { maxDuration: 120 };
 
@@ -13,7 +14,9 @@ const DAILY_LIMIT = Number(process.env.AI_DAILY_LIMIT || 200);
 // Server-side refusal fallback only exists on these models.
 const FALLBACK_MODELS = ['claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5', 'claude-fable-5-2', 'claude-fable-5-1'];
 
-const client = new Anthropic(); // reads ANTHROPIC_API_KEY from the Vercel environment
+// Which AI service to use: Anthropic (paid) if ANTHROPIC_API_KEY is set, otherwise Google Gemini (free tier) if GEMINI_API_KEY is set.
+const provider = () => process.env.AI_PROVIDER || (process.env.ANTHROPIC_API_KEY ? 'anthropic' : process.env.GEMINI_API_KEY ? 'gemini' : null);
+const client = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 
 // Kept byte-for-byte the same on every request so the prompt cache and saved conversations stay valid.
 // Anything that changes (today's date, the student's logs, saved notes) is sent as a
@@ -225,13 +228,22 @@ async function countUsage(uid) {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
   try {
-    if (!process.env.ANTHROPIC_API_KEY) throw Object.assign(new Error('The AI is not set up yet: add ANTHROPIC_API_KEY in Vercel (SETUP.md, step 3).'), { status: 503 });
+    const which = provider();
+    if (!which) throw Object.assign(new Error('The AI is not set up yet: add GEMINI_API_KEY (free) or ANTHROPIC_API_KEY in Vercel (SETUP.md, step 3).'), { status: 503 });
     const user = await requireUser(req);
     const { messages } = await readJson(req);
     if (!Array.isArray(messages) || !messages.length) throw Object.assign(new Error('No messages.'), { status: 400 });
     if (JSON.stringify(messages).length > 4_000_000) throw Object.assign(new Error('This chat is too long. Start a new chat.'), { status: 413 });
     if (messages.some(m => !['user', 'assistant', 'system'].includes(m?.role))) throw Object.assign(new Error('Bad message.'), { status: 400 });
     if (!(await countUsage(user.uid))) throw Object.assign(new Error(`You've reached today's limit of ${DAILY_LIMIT} AI steps. It resets tomorrow.`), { status: 429 });
+
+    if (which === 'gemini') {
+      const r = await geminiChat({
+        system: SYSTEM.replace(' Use web search when current or factual information would help.', ''),
+        tools: TOOLS, messages, apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-2.5-flash'
+      });
+      return res.status(200).json(r);
+    }
 
     const betas = ['thinking-binding-controls-2026-08-01'];
     const extra = {};
@@ -252,6 +264,8 @@ export default async function handler(req, res) {
     });
     res.status(200).json({ content: r.content, stop_reason: r.stop_reason, stop_details: r.stop_details ?? null });
   } catch (err) {
+    if (err.geminiStatus === 429) return sendError(res, Object.assign(new Error('The free AI is busy right now (free keys have a per-minute limit). Wait a minute and try again.'), { status: 429 }));
+    if (err.geminiStatus === 400 || err.geminiStatus === 403 || err.geminiStatus === 404) { console.error(err.message); return sendError(res, Object.assign(new Error('The AI key or model in Vercel is not valid. Check GEMINI_API_KEY (SETUP.md, step 3).'), { status: 500 })); }
     if (err instanceof Anthropic.RateLimitError) return sendError(res, Object.assign(new Error('The AI is busy right now. Try again in a minute.'), { status: 429 }));
     if (err instanceof Anthropic.AuthenticationError) return sendError(res, Object.assign(new Error('The AI key in Vercel is not valid.'), { status: 500 }));
     if (err instanceof Anthropic.BadRequestError) { console.error(err); return sendError(res, Object.assign(new Error('The AI could not read this chat. Start a new chat and try again.'), { status: 400 })); }

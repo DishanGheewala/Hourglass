@@ -7,7 +7,7 @@ Most of the app works as soon as it is deployed. These steps switch on the rest.
 | Log in, logging, graphs, calendar, settings | Step 1 (already done if you could log in) |
 | Apple Calendar link, saved AI chats | Step 1.4 (publish the rules) |
 | Data going to your spreadsheet | Step 2 |
-| AI assistant | Step 3 (one key) |
+| AI assistant | Step 3 (free key) |
 | Gmail / Calendar / Drive linking | Step 4 |
 | Alerts when the app is closed | Step 5 (optional) |
 
@@ -35,14 +35,20 @@ name or email. Rows are never deleted: deleting a log marks its row "Deleted in 
 an account leaves existing rows alone. Logs saved before the sheet worked are sent the next time each consenting
 student opens the app.
 
-## 3. AI assistant (one key)
-In Vercel: project → **Settings → Environment Variables** → add `ANTHROPIC_API_KEY` (create it at
-console.anthropic.com → API keys, add a few dollars of credit and set a monthly spend limit) for **Production**,
-then **Deployments → ⋯ → Redeploy**.
+## 3. AI assistant (free option)
+Add ONE of these in Vercel: project → **Settings → Environment Variables** (Production), then **Deployments → ⋯ → Redeploy**.
 
-Optional: `AI_MODEL` (default `claude-opus-5-5`; `claude-sonnet-5-5` or `claude-haiku-5-5` are cheaper) and
-`AI_DAILY_LIMIT` (AI steps per student per day, default 200; the limit needs step 5's service account).
-Roughly 1–5 cents per message with the default model.
+**Free: `GEMINI_API_KEY`.** Go to https://aistudio.google.com/apikey, sign in with Google, click **Create API key**. No credit card is needed.
+Free keys have a per-minute limit, so the assistant may say "busy, try again in a minute" when several students use it at once.
+`GEMINI_MODEL` is optional (default `gemini-2.5-flash`); set it if Google retires that name.
+Important: Google's terms for free Gemini keys may let Google use the chats to improve its products, and may restrict
+apps aimed at under-18s. Read https://ai.google.dev/gemini-api/terms before real students use the AI, and tell
+them not to type private information into it.
+
+**Paid (better answers): `ANTHROPIC_API_KEY`.** From console.anthropic.com → API keys, with credit added. If both keys
+are set, Anthropic is used. Optional: `AI_MODEL` (default `claude-opus-5-5`) and `AI_DAILY_LIMIT` (needs step 5's service account).
+
+The free Gemini option cannot search the web; everything else (emails, Drive study material, quizzes, deadlines, memory) works.
 
 ## 4. Link Gmail, Google Calendar and Drive
 1. console.cloud.google.com → your project → **APIs & Services → Library**: enable **Google Calendar API**, **Gmail API**, **Google Drive API**.
