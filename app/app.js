@@ -245,6 +245,7 @@ if (auth) {
       applyTheme(state.profile.theme || document.documentElement.dataset.theme);
       await loadAlerts();
       show('app');
+      if (state.rulesProblem) toast('Some features are off until the Firebase rules are published (SETUP.md, step 1.4).');
       startListeners();
       setTab(state.tab);
       flushQueue();
@@ -413,11 +414,17 @@ async function addDeadline({ title, date, time, gcal }) {
 
 // ---------- reminder alerts (push notifications, work even when the app is closed) ----------
 async function loadAlerts() {
-  const snap = await getDoc(pushRef());
-  if (snap.exists() && Array.isArray(snap.data().alerts)) state.alerts = snap.data().alerts;
-  else {
-    state.alerts = [{ ...DEFAULT_ALERT, time: state.profile.reminderTime || DEFAULT_ALERT.time }];
+  const fallback = [{ ...DEFAULT_ALERT, time: state.profile.reminderTime || DEFAULT_ALERT.time }];
+  try {
+    const snap = await getDoc(pushRef());
+    if (snap.exists() && Array.isArray(snap.data().alerts)) { state.alerts = snap.data().alerts; return; }
+    state.alerts = fallback;
     await setDoc(pushRef(), { alerts: state.alerts, tz: Intl.DateTimeFormat().resolvedOptions().timeZone }, { merge: true });
+  } catch (e) {
+    // Usually the Firebase rules were not re-published yet (SETUP.md step 1.4). Keep the app usable.
+    console.warn('Could not load alerts', e);
+    state.alerts = fallback;
+    state.rulesProblem = true;
   }
 }
 async function saveAlerts(alerts) {
