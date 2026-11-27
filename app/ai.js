@@ -296,6 +296,7 @@ async function callModel() {
   const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ messages: chat.messages }) });
   let data = {};
   try { data = await res.json(); } catch {}
+  if (res.status === 503 && /not set up/i.test(data.error || '')) throw new Error("The AI assistant isn't switched on yet. Everything else in Hourglass works. Ask the app's owner to enable it.");
   if (!res.ok) throw new Error(data.error || (res.status === 404 ? 'The AI server is not deployed yet (see SETUP.md, step 4).' : `The AI server returned ${res.status}.`));
   return data;
 }
