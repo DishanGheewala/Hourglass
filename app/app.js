@@ -618,7 +618,7 @@ function renderSettings() {
     <div class="card"><h3>Research sharing</h3>
       <p>${p.consent ? 'You agreed to share your logs for research, under a random study code.' : 'You are not sharing data for research.'}</p>
       <p class="muted">Your study code: <b>${esc(p.participantCode)}</b> (used instead of your name or User ID).${p.consent && status ? ` Last sync: ${esc(status)}.` : ''}</p>
-      <div class="stack">${p.consent ? '<button class="btn" data-action="research-stop">Stop sharing new logs</button>' : '<button class="btn" data-action="research-start">I agree to share my logs for research</button>'}</div></div>
+      <div class="stack">${p.consent ? '<button class="btn" data-action="research-test">Test the spreadsheet connection</button><button class="btn" data-action="research-stop">Stop sharing new logs</button>' : '<button class="btn" data-action="research-start">I agree to share my logs for research</button>'}</div></div>
     <div class="card"><h3>Account</h3>
       <div class="stack"><button class="btn" data-action="logout">Log out</button><button class="btn danger" data-action="delete-account">Delete my account and data</button></div></div>`;
 }
@@ -713,6 +713,18 @@ const actions = {
     G.revoke(b.dataset.svc);
     await patchProfile({ linked: { ...(state.profile.linked || {}), [b.dataset.svc]: false } });
     renderSettings();
+  },
+  'research-test': async () => {
+    if (!state.profile.consent) throw new Error('Turn on research sharing first.');
+    if (!researchReady()) throw new Error('RESEARCH_URL is not set in config.js.');
+    let j;
+    try {
+      const r = await fetch(RESEARCH_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, redirect: 'follow', body: JSON.stringify({ action: 'consent', code: state.profile.participantCode, key: STUDY_KEY }) });
+      j = await r.json();
+    } catch { throw new Error('Could not reach the spreadsheet script. In Apps Script: Deploy → Manage deployments → check "Who has access" is Anyone, then deploy a New version.'); }
+    if (j.ok) { lsSet('hg_research_status', `ok ${new Date().toLocaleString()}`); toast('Connected ✓ The spreadsheet script is working.'); backfillResearch(); renderSettings(); }
+    else if (j.error === 'bad key') throw new Error('The spreadsheet script answered "bad key": the live version is old or its STUDY_KEY differs. Deploy → Manage deployments → pencil → New version → Deploy.');
+    else throw new Error('The spreadsheet script answered: ' + (j.error || 'unknown error'));
   },
   'research-stop': stopResearch,
   'research-start': startResearch,
