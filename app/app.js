@@ -98,27 +98,41 @@ const qKey = () => 'hg_queue_' + state.user.uid;
 const readQ = key => { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch { return []; } };
 function sendResearch(item) {
   if (!state.user || !researchReady() || !state.profile?.consent) return;
+  if (item.action === 'delete' && lsGet('hg_legacy') === '1') return; // an older sheet script would delete the row; keep the data
   const key = qKey();
   const q = readQ(key);
   q.push({ ...item, code: state.profile.participantCode, ts: new Date().toISOString() });
   lsSet(key, JSON.stringify(q));
   flushQueue();
 }
-async function postResearch(item) {
-  const body = JSON.stringify({ ...item, key: STUDY_KEY });
+// The live sheet script may still be an older version that used a slightly different key
+// ("...ch7fa"). Try the current key first, then that one, and remember which works.
+const LEGACY_KEY = STUDY_KEY + 'a';
+async function postOnce(item, key) {
+  const body = JSON.stringify({ ...item, key });
   try {
     const r = await fetch(RESEARCH_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body, redirect: 'follow' });
-    const j = await r.json().catch(() => ({ ok: r.ok }));
-    lsSet('hg_research_status', j.ok ? `ok ${new Date().toLocaleString()}` : `error: ${j.error || r.status}`);
-    if (!j.ok) console.warn('Research sheet did not accept a row:', j.error);
-    return true; // a rejected row is a bug to fix, not something to retry forever
+    return await r.json().catch(() => ({ ok: r.ok }));
   } catch {
-    try { // some browsers hide the reply: send without reading it
+    try { // some browsers hide the reply: send it without reading the reply
       await fetch(RESEARCH_URL, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body });
-      lsSet('hg_research_status', `sent (unconfirmed) ${new Date().toLocaleString()}`);
-      return true;
-    } catch { return false; } // offline: keep it in the queue
+      return { ok: true, unconfirmed: true };
+    } catch { return null; } // offline
   }
+}
+async function postResearch(item) {
+  const order = lsGet('hg_legacy') === '1' ? [LEGACY_KEY, STUDY_KEY] : [STUDY_KEY, LEGACY_KEY];
+  let j = null;
+  for (const key of order) {
+    j = await postOnce(item, key);
+    if (j === null) return false;
+    if (j.error !== 'bad key') { lsSet('hg_legacy', key === LEGACY_KEY ? '1' : '0'); break; }
+  }
+  const legacy = lsGet('hg_legacy') === '1';
+  const accepted = j.ok || (legacy && j.error === 'bad entry'); // an old script doesn't know the "consent" action
+  lsSet('hg_research_status', accepted ? `ok${legacy ? ' (older sheet script)' : ''} ${new Date().toLocaleString()}` : j.unconfirmed ? `sent (unconfirmed) ${new Date().toLocaleString()}` : `error: ${j.error}`);
+  if (!accepted) console.warn('Research sheet did not accept a row:', j.error);
+  return true; // a rejected row is a bug to fix, not something to retry forever
 }
 let flushing = false;
 async function flushQueue() {
@@ -717,14 +731,25 @@ const actions = {
   'research-test': async () => {
     if (!state.profile.consent) throw new Error('Turn on research sharing first.');
     if (!researchReady()) throw new Error('RESEARCH_URL is not set in config.js.');
-    let j;
-    try {
-      const r = await fetch(RESEARCH_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, redirect: 'follow', body: JSON.stringify({ action: 'consent', code: state.profile.participantCode, key: STUDY_KEY }) });
-      j = await r.json();
-    } catch { throw new Error('Could not reach the spreadsheet script. In Apps Script: Deploy → Manage deployments → check "Who has access" is Anyone, then deploy a New version.'); }
-    if (j.ok) { lsSet('hg_research_status', `ok ${new Date().toLocaleString()}`); toast('Connected ✓ The spreadsheet script is working.'); backfillResearch(); renderSettings(); }
-    else if (j.error === 'bad key') throw new Error('The spreadsheet script answered "bad key": the live version is old or its STUDY_KEY differs. Deploy → Manage deployments → pencil → New version → Deploy.');
-    else throw new Error('The spreadsheet script answered: ' + (j.error || 'unknown error'));
+    let result = null;
+    for (const key of [STUDY_KEY, LEGACY_KEY]) {
+      let j;
+      try {
+        const r = await fetch(RESEARCH_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, redirect: 'follow', body: JSON.stringify({ action: 'consent', code: state.profile.participantCode, key }) });
+        j = await r.json();
+      } catch { throw new Error('Could not reach the spreadsheet script. In Apps Script: Deploy → Manage deployments → "Who has access" must be Anyone.'); }
+      if (j.ok) { result = { key, old: false }; break; }
+      if (j.error === 'bad entry') { result = { key, old: true }; break; } // an old script: key accepted
+      if (j.error !== 'bad key') throw new Error('The spreadsheet script answered: ' + j.error);
+    }
+    if (!result) throw new Error('The spreadsheet script rejected both keys. Its STUDY_KEY must be exactly the one in config.js.');
+    const legacy = result.key === LEGACY_KEY || result.old;
+    lsSet('hg_legacy', legacy ? '1' : '0');
+    lsSet('hg_research_status', `ok${legacy ? ' (older sheet script)' : ''} ${new Date().toLocaleString()}`);
+    localStorage.removeItem('hg_backfill_v2_' + state.user.uid);
+    backfillResearch();
+    toast(legacy ? 'Connected ✓ (the sheet is running an older script, but your logs will be saved)' : 'Connected ✓ The spreadsheet script is working.');
+    renderSettings();
   },
   'research-stop': stopResearch,
   'research-start': startResearch,
