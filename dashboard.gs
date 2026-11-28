@@ -101,12 +101,12 @@ function buildParticipantDashboard_(ss) {
 
   // summary
   sh.getRange('A5:D5').setValues([['Category', 'Days logged', 'Average hours', 'Average rating']]).setFontWeight('bold').setBackground('#f1f5f9');
-  const rows = [
-    ['Sleep', '=COUNT(N2:N)', '=IFERROR(ROUND(AVERAGE(N2:N),2),"-")', '=IFERROR(ROUND(AVERAGE(Q2:Q),1),"-")'],
-    ['Study / Work', '=COUNT(T2:T)', '=IFERROR(ROUND(AVERAGE(T2:T),2),"-")', '=IFERROR(ROUND(AVERAGE(W2:W),1),"-")'],
-    ['Free time', '=COUNT(Z2:Z)', '=IFERROR(ROUND(AVERAGE(Z2:Z),2),"-")', '-']
-  ];
-  sh.getRange(6, 1, 3, 4).setFormulas(rows);
+  sh.getRange(6, 1, 3, 1).setValues([['Sleep'], ['Study / Work'], ['Free time']]); // plain text labels
+  sh.getRange(6, 2, 3, 3).setFormulas([
+    ['=COUNT(N2:N)', '=IFERROR(ROUND(AVERAGE(N2:N),2),"-")', '=IFERROR(ROUND(AVERAGE(Q2:Q),1),"-")'],
+    ['=COUNT(T2:T)', '=IFERROR(ROUND(AVERAGE(T2:T),2),"-")', '=IFERROR(ROUND(AVERAGE(W2:W),1),"-")'],
+    ['=COUNT(Z2:Z)', '=IFERROR(ROUND(AVERAGE(Z2:Z),2),"-")', '="-"']
+  ]);
 
   sh.setColumnWidth(1, 230); sh.setColumnWidth(2, 130); sh.setColumnWidth(3, 130); sh.setColumnWidth(4, 130);
   for (let c = 5; c <= 12; c++) sh.setColumnWidth(c, 100);
