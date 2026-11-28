@@ -309,7 +309,7 @@ async function callServer() {
   const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ messages: chat.messages }) });
   let data = {};
   try { data = await res.json(); } catch {}
-  if ((res.status === 503 && /not set up/i.test(data.error || '')) || res.status === 404) throw Object.assign(new Error('not set up'), { notSetUp: true });
+  if ((res.status === 503 && /not set up/i.test(data.error || '')) || res.status === 404) throw Object.assign(new Error('not set up'), { notSetUp: true, detail: res.status === 404 ? 'the AI server was not found (404)' : (data.error || 'no key set') });
   if (!res.ok) throw new Error(data.error || `The AI server returned ${res.status}.`);
   return data;
 }
@@ -323,7 +323,6 @@ async function callLocal() {
     await Local.load(r => setWorking(`Downloading the AI… ${Math.round((r.progress || 0) * 100)}%`));
     try { localStorage.setItem('hg_local_ready', '1'); } catch {}
   }
-  if (!chat.display.some(d => d.kind === 'status' && /on-device/.test(d.text || ''))) show({ kind: 'status', text: 'Using the free on-device AI: private, but simpler than the full AI.' });
   setWorking('Thinking…');
   const raw = await Local.generate(Local.buildPrompt(chat.messages, D.state.profile?.linked || {}), {
     onToken: t => setWorking(`Writing… ${t.trim().split(/\s+/).length} words`)
@@ -337,7 +336,11 @@ async function callLocal() {
 async function callModel() {
   if (!useLocal) {
     try { return await callServer(); }
-    catch (e) { if (!e.notSetUp) throw e; useLocal = true; }
+    catch (e) {
+      if (!e.notSetUp) throw e;
+      useLocal = true;
+      show({ kind: 'status', text: `The cloud AI is not available (${e.detail}). Using the simpler on-device AI instead.` });
+    }
   }
   return callLocal();
 }
