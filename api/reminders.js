@@ -29,24 +29,28 @@ export default async function handler(req, res) {
     const v = await getVapid();
     const vapidDetails = { subject: vapidSubject(), publicKey: v.publicKey, privateKey: v.privateKey };
     const users = await listDocs('users', ['alerts', 'subs', 'tz', 'sent']);
-    let sent = 0;
+    let sent = 0, failed = 0, withDevices = 0, dueCount = 0;
+    const errors = [], detail = [];
     for (const u of users) {
       const d = u.data;
       const subs = Array.isArray(d.subs) ? d.subs : [];
       if (!subs.length || !Array.isArray(d.alerts)) continue;
+      withDevices++;
       const now = localNow(d.tz || 'UTC');
       const done = { ...(d.sent || {}) };
       const due = d.alerts.filter(a => {
         const m = toMin(a.time);
         return Number.isFinite(m) && now.minutes >= m && now.minutes - m < WINDOW_MIN && done[a.time] !== now.date;
       });
+      if (req.query.debug) detail.push({ user: u.id.slice(0, 6), tz: d.tz || 'UTC(default)', localNow: `${now.date} ${String(Math.floor(now.minutes / 60)).padStart(2, '0')}:${String(now.minutes % 60).padStart(2, '0')}`, devices: subs.length, alerts: d.alerts.map(a => `${a.time}${done[a.time] === now.date ? ' (already sent today)' : ''}`), due: due.map(a => a.time) });
       if (!due.length) continue;
+      dueCount += due.length;
       const dead = new Set();
       for (const a of due) {
         const payload = JSON.stringify({ title: 'Hourglass', body: a.label || 'Time to log your day: sleep, study/work and free time.', url: '/app/', tag: 'hg-' + a.time });
         for (const s of subs) {
           try { await sendNotification(s, payload, { vapidDetails, TTL: 3600 }); sent++; }
-          catch (e) { if (e.statusCode === 404 || e.statusCode === 410) dead.add(s.endpoint); else console.error('push failed', e.statusCode, e.body); }
+          catch (e) { failed++; if (errors.length < 3) errors.push(`${e.statusCode || ''} ${String(e.body || e.message).slice(0, 120)}`.trim()); if (e.statusCode === 404 || e.statusCode === 410) dead.add(s.endpoint); else console.error('push failed', e.statusCode, e.body); }
         }
         done[a.time] = now.date;
       }
@@ -54,6 +58,6 @@ export default async function handler(req, res) {
       if (dead.size) update.subs = subs.filter(s => !dead.has(s.endpoint));
       await patchData(`users/${u.id}`, update);
     }
-    res.status(200).json({ ok: true, sent });
+    res.status(200).json({ ok: true, sent, users: users.length, withDevices, due: dueCount, failed, ...(errors.length ? { errors } : {}), ...(req.query.debug ? { detail } : {}) });
   } catch (err) { sendError(res, err); }
 }
