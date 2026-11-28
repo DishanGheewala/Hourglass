@@ -66,7 +66,11 @@ export async function geminiChat({ system, tools, messages, apiKey, model, fetch
   catch (e) { throw Object.assign(new Error(e && e.name === 'TimeoutError' ? 'Google took too long to answer. Try again.' : 'Could not reach Google: ' + (e && e.message)), { geminiStatus: 504 }); }
   if (res.status === 404 && !fallbackModel) {
     const alt = await findFlashModel(apiKey, fetchImpl).catch(() => null);
-    if (alt && alt !== model) { fallbackModel = alt; model = alt; res = await call(model); }
+    if (alt && alt !== model) {
+      fallbackModel = alt; model = alt;
+      try { res = await call(model); }
+      catch (e) { throw Object.assign(new Error(e && e.name === 'TimeoutError' ? `Google took too long to answer on ${model}. Try again.` : 'Could not reach Google: ' + (e && e.message)), { geminiStatus: 504 }); }
+    }
   }
   const j = await res.json().catch(() => ({}));
   if (!res.ok) throw Object.assign(new Error(j.error?.message || `Gemini returned ${res.status}`), { geminiStatus: res.status });
