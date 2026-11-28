@@ -35,6 +35,11 @@ name or email. Rows are never deleted: deleting a log marks its row "Deleted in 
 an account leaves existing rows alone. Logs saved before the sheet worked are sent the next time each consenting
 student opens the app.
 
+### Optional: charts in your research sheet
+`dashboard.gs` adds a **Dashboard** tab (pick a participant code and see charts of their sleep, sleepiness, study/work, productivity and
+free time) and a **Group averages** tab. In the Apps Script editor click + next to Files → Script, name it `Dashboard`, paste the file,
+Save, choose `buildDashboard` and Run (approve if asked). Reload the sheet for the new "Hourglass" menu.
+
 ## 3. AI assistant
 **With no setup at all**, the AI tab uses a free on-device AI: a small model that runs privately inside the student's own browser
 (no account, no key, no cost, chats never leave the device). The first time, it asks to download about 1 GB, so use Wi-Fi.
