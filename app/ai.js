@@ -345,6 +345,16 @@ function polishEmail(body) {
   return b;
 }
 
+// Accepts "20:30", "8:30 PM", "8pm" ... and returns "HH:MM" (or null).
+export function normTime(t) {
+  const m = String(t ?? '').trim().toLowerCase().match(/^(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?$/);
+  if (!m) return null;
+  let h = +m[1]; const mi = +(m[2] || 0); const ap = m[3];
+  if (ap) { if (h < 1 || h > 12) return null; h = (h % 12) + (ap[0] === 'p' ? 12 : 0); }
+  if (h > 23 || mi > 59) return null;
+  return String(h).padStart(2, '0') + ':' + String(mi).padStart(2, '0');
+}
+
 const TOOLS = {
   async log_time({ category, date, hours, rating }) {
     validDate(date);
@@ -391,7 +401,10 @@ const TOOLS = {
     return { deleted: true, google_calendar: g };
   },
   async set_reminders({ alerts }) {
-    const clean = (alerts || []).filter(a => /^\d{2}:\d{2}$/.test(a.time)).map(a => ({ time: a.time, label: String(a.label || '').slice(0, 120) }));
+    const asked = Array.isArray(alerts) ? alerts : [];
+    const clean = asked.map(a => ({ time: normTime(a.time), label: String(a.label || '').slice(0, 120) })).filter(a => a.time);
+    // Never wipe the student's alerts because the times could not be read.
+    if (asked.length && !clean.length) throw new Error('I could not read those times. Use a time like 20:30 or 8:30 PM.');
     await D.setAlerts(clean);
     show({ kind: 'status', text: `Reminders set: ${clean.map(a => fmtTime12(a.time)).join(', ') || 'none'}.` });
     return { saved: clean, push_enabled_on_this_device: D.pushEnabled() };
