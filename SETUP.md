@@ -69,7 +69,7 @@ Two settings in Vercel plus two lines in your Apps Script. The server makes its 
    - `CRON_SECRET` = any long random string (letters and numbers).
 3. **Timer** (Vercel's free plan can't run a job every few minutes, so your Apps Script does it): in `apps-script.gs` set `APP_URL` to your
    Vercel address and `CRON_SECRET` to the same string as in Vercel, Save, choose `setupReminderTimer`, **Run**, and approve. It then calls your
-   app every 5 minutes. Do not commit the secret to GitHub.
+   app every minute (alerts arrive within about a minute; if many students use the app, change `everyMinutes(1)` to 5 to stay inside free limits). Do not commit the secret to GitHub.
 4. In the app: **Settings → Reminder alerts → Turn on alerts for this device → Send me a test alert.**
 
 iPhone/iPad (iOS 16.4+) only allow alerts after **Share → Add to Home Screen**, then opening Hourglass from the icon.

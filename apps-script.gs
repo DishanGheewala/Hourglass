@@ -7,7 +7,7 @@
  *    study code (never a User ID, name or email). Rows are never deleted: if a student deletes a
  *    log in the app, the row is only marked "Deleted in app", so collected data is kept.
  * 2. Records each consenting participant on the "Participants" tab.
- * 3. Optional: every 5 minutes, asks the Vercel app to send any reminder alerts that are due
+ * 3. Optional: every minute, asks the Vercel app to send any reminder alerts that are due
  *    (run setupReminderTimer once; see SETUP.md, step 5).
  */
 const STUDY_KEY = '9837rjc9urnc834rny987c49c08n30c98038ch7f'; // must match STUDY_KEY in app/config.js exactly
@@ -106,7 +106,7 @@ function out_(obj) {
 // Run this function once from the Apps Script editor (select it, press Run, approve).
 function setupReminderTimer() {
   ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'sendDueReminders').forEach(t => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('sendDueReminders').timeBased().everyMinutes(5).create();
+  ScriptApp.newTrigger('sendDueReminders').timeBased().everyMinutes(1) // Apps Script's fastest timer. Use 5 if many students use the app (free Firebase read limits).create();
   sendDueReminders();
 }
 
