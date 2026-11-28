@@ -12,8 +12,9 @@ export default async function handler(req, res) {
     if (!r.ok) return res.status(503).send('The calendar is not ready yet. Publish the Firebase rules (SETUP.md, step 1).');
     const ics = (await r.json()).fields?.ics?.stringValue;
     if (!ics) return res.status(404).send('Not found');
-    res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
-    res.setHeader('Cache-Control', 'private, max-age=300');
+    // ?view=1 shows the feed as plain text in the browser (handy for checking what Apple Calendar will get)
+    res.setHeader('Content-Type', req.query.view ? 'text/plain; charset=utf-8' : 'text/calendar; charset=utf-8');
+    res.setHeader('Cache-Control', 'private, max-age=60');
     res.status(200).send(ics);
   } catch (err) {
     console.error(err);
