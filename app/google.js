@@ -103,7 +103,24 @@ export async function listCalendarEvents(start, end) {
     singleEvents: 'true', orderBy: 'startTime', maxResults: '100'
   });
   const r = await gfetch('calendar', `${CAL}?${p}`);
-  return (r.items || []).map(e => ({ title: e.summary || '(no title)', start: e.start?.dateTime || e.start?.date, end: e.end?.dateTime || e.end?.date, location: e.location || undefined }));
+  return (r.items || []).map(e => ({ id: e.id, title: e.summary || '(no title)', start: e.start?.dateTime || e.start?.date, end: e.end?.dateTime || e.end?.date, location: e.location || undefined }));
+}
+
+// Removes an event from Google Calendar. An event that is already gone counts as success.
+export async function deleteCalendarEvent(id) {
+  try { await gfetch('calendar', `${CAL}/${encodeURIComponent(id)}`, { method: 'DELETE' }); }
+  catch (e) { if (!/\b(404|410)\b/.test(String(e.message))) throw e; }
+}
+// For deadlines made before Hourglass remembered the event: look for "Due: <title>" on that day.
+export async function findDeadlineEvent(title, date) {
+  const p = new URLSearchParams({
+    timeMin: new Date(`${date}T00:00:00`).toISOString(), timeMax: new Date(`${addDays(date, 1)}T00:00:00`).toISOString(),
+    singleEvents: 'true', maxResults: '50', q: title
+  });
+  const r = await gfetch('calendar', `${CAL}?${p}`);
+  const want = `Due: ${title}`.trim().toLowerCase();
+  const hit = (r.items || []).find(e => String(e.summary || '').trim().toLowerCase() === want);
+  return hit ? hit.id : null;
 }
 
 // ---------- Gmail ----------

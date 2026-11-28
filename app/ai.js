@@ -386,9 +386,9 @@ const TOOLS = {
   async delete_deadline({ id }) {
     const d = D.state.deadlines.find(x => x.id === id);
     if (!d) return { deleted: false, reason: 'No deadline with that id.' };
-    await D.deleteDeadline(d);
-    show({ kind: 'status', text: `Deleted deadline “${d.title}”.` });
-    return { deleted: true };
+    const g = await D.deleteDeadline(d);
+    show({ kind: 'status', text: `Deleted deadline “${d.title}”${g === 'deleted' ? ' (and from Google Calendar)' : ''}.` });
+    return { deleted: true, google_calendar: g };
   },
   async set_reminders({ alerts }) {
     const clean = (alerts || []).filter(a => /^\d{2}:\d{2}$/.test(a.time)).map(a => ({ time: a.time, label: String(a.label || '').slice(0, 120) }));

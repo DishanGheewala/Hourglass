@@ -236,7 +236,7 @@ AI.initAI({
   saveLog: (c, d, h, r) => saveLog(c, d, h, r),
   deleteLog: l => deleteLog(l),
   addDeadline: d => addDeadline(d),
-  deleteDeadline: d => deleteDoc(doc(dlCol(), d.id)),
+  deleteDeadline: d => removeDeadline(d),
   setAlerts: a => saveAlerts(a),
   pushEnabled: () => state.pushOn,
   notify: (title, body) => notify(title, body),
@@ -477,9 +477,29 @@ function renderCalendar() {
     <p class="muted" style="text-align:center">Want these on your iPhone? Settings → Apple Calendar.</p>`;
 }
 async function addDeadline({ title, date, time, gcal }) {
-  await addDoc(dlCol(), { title, date, time: time || '', createdAt: serverTimestamp() });
-  if (gcal) await G.addCalendarEvent({ title: `Due: ${title}`, date, time });
+  const ref = await addDoc(dlCol(), { title, date, time: time || '', createdAt: serverTimestamp() });
+  if (gcal) {
+    const ev = await G.addCalendarEvent({ title: `Due: ${title}`, date, time });
+    if (ev && ev.id) await updateDoc(ref, { gcalId: ev.id }).catch(() => {}); // remember it so deleting here deletes it there too
+  }
 }
+// Deletes a deadline here and, if it was copied to Google Calendar, there too.
+// Returns what happened to the Google Calendar copy: 'none' | 'deleted' | 'not linked' | 'failed: ...'.
+async function removeDeadline(d) {
+  let gcal = 'none';
+  const linked = !!state.profile?.linked?.calendar;
+  if (d.gcalId && !linked) gcal = 'not linked';
+  else if (linked) {
+    try {
+      const id = d.gcalId || (await G.findDeadlineEvent(d.title, d.date));
+      if (id) { await G.deleteCalendarEvent(id); gcal = 'deleted'; }
+    } catch (e) { gcal = 'failed: ' + (e.message || e); }
+  }
+  await deleteDoc(doc(dlCol(), d.id));
+  return gcal;
+}
+const gcalNote = r => (r === 'not linked' ? "Deleted here. It's still in your Google Calendar because Google Calendar isn't linked in Settings."
+  : r.startsWith('failed') ? `Deleted here, but I couldn't remove it from Google Calendar (${r.slice(8)}).` : r === 'deleted' ? 'Deleted here and from your Google Calendar.' : 'Deleted.');
 
 // ---------- reminder alerts (push notifications that work when the app is closed) ----------
 // Everything lives on the student's own profile document, so no extra database setup is needed.
@@ -700,8 +720,8 @@ const actions = {
   'cal-pick': b => { state.calSel = b.dataset.date; renderCalendar(); },
   'del-deadline': async b => {
     const d = state.deadlines.find(x => x.id === b.dataset.id);
-    if (!d || !confirm(`Delete “${d.title}”?`)) return;
-    await deleteDoc(doc(dlCol(), d.id));
+    if (!d || !confirm(`Delete “${d.title}”?${state.profile?.linked?.calendar ? ' It will also be removed from your Google Calendar.' : ''}`)) return;
+    toast(gcalNote(await removeDeadline(d)));
   },
   chip: b => AI.ask(b.dataset.text),
   theme: async b => { applyTheme(b.dataset.t); await patchProfile({ theme: b.dataset.t }); renderSettings(); },
