@@ -16,9 +16,9 @@ export async function admin() {
 }
 
 // Checks the Firebase sign-in token the browser sends. Needs no secret: only Google's public keys.
-const KEYS = createRemoteJWKSet(new URL('https://www.googleapis.com/service_account/v1/jwk/securetoken@system.gserviceaccount.com'));
+const KEYS = createRemoteJWKSet(new URL('https://www.googleapis.com/robot/v1/metadata/jwk/securetoken@system.gserviceaccount.com'));
 export async function verifyToken(token, keys = KEYS) {
-  const { payload } = await jwtVerify(token, keys, { issuer: `https://securetoken.google.com/${PROJECT_ID}`, audience: PROJECT_ID, algorithms: ['RS256'] });
+  const { payload } = await jwtVerify(token, keys, { issuer: `https://securetoken.google.com/${PROJECT_ID}`, audience: PROJECT_ID, algorithms: ['RS256'], clockTolerance: 60 });
   if (!payload.sub) throw new Error('no subject');
   return { ...payload, uid: payload.sub };
 }
@@ -27,7 +27,7 @@ export async function requireUser(req) {
   const token = h.startsWith('Bearer ') ? h.slice(7) : '';
   if (!token) throw Object.assign(new Error('Not signed in.'), { status: 401 });
   try { return await verifyToken(token); }
-  catch (e) { console.error('verifyToken', e.code || e.message); throw Object.assign(new Error('Your sign-in expired. Refresh the page.'), { status: 401 }); }
+  catch (e) { const why = [e.code, e.claim].filter(Boolean).join(' ') || e.message; console.error('verifyToken', why); throw Object.assign(new Error(`Your sign-in could not be verified (${why}). Refresh the page and try again.`), { status: 401 }); }
 }
 
 export function sendError(res, err) {
