@@ -59,13 +59,14 @@ export async function geminiChat({ system, tools, messages, apiKey, model, fetch
   const body = {
     systemInstruction: { parts: [{ text: system }] },
     contents: toContents(messages),
-    tools: [{ functionDeclarations: tools.filter(t => t.input_schema).map(toDecl) }],
-    generationConfig: { maxOutputTokens: 8192 }
+    ...(tools.some(t => t.input_schema) ? { tools: [{ functionDeclarations: tools.filter(t => t.input_schema).map(toDecl) }] } : {}),
+    // Newer Gemini models "think" before answering, which can take very long. Ask for little thinking.
+    generationConfig: { maxOutputTokens: 4096, thinkingConfig: { thinkingLevel: 'low' } }
   };
-  const call = m => fetchImpl(`${BASE}/${m}:generateContent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey }, body: JSON.stringify(body), signal: AbortSignal.timeout(40000) });
+  const call = m => fetchImpl(`${BASE}/${m}:generateContent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey }, body: JSON.stringify(body), signal: AbortSignal.timeout(50000) });
   let res;
   try { res = await call(model); }
-  catch (e) { throw Object.assign(new Error(e && e.name === 'TimeoutError' ? 'Google took too long to answer. Try again.' : 'Could not reach Google: ' + (e && e.message)), { geminiStatus: 504 }); }
+  catch (e) { throw Object.assign(new Error(e && e.name === 'TimeoutError' ? `Google took too long to answer on ${model}. Try again.` : 'Could not reach Google: ' + (e && e.message)), { geminiStatus: 504 }); }
   if (res.status === 404 && !fallbackModel) {
     const alt = await findFlashModel(apiKey, fetchImpl).catch(() => null);
     if (alt && alt !== model) {
@@ -74,7 +75,12 @@ export async function geminiChat({ system, tools, messages, apiKey, model, fetch
       catch (e) { throw Object.assign(new Error(e && e.name === 'TimeoutError' ? `Google took too long to answer on ${model}. Try again.` : 'Could not reach Google: ' + (e && e.message)), { geminiStatus: 504 }); }
     }
   }
-  const j = await res.json().catch(() => ({}));
+  let j = await res.json().catch(() => ({}));
+  if (res.status === 400 && /think/i.test(j.error?.message || '')) {
+    delete body.generationConfig.thinkingConfig;
+    try { res = await call(model); } catch (e) { throw Object.assign(new Error(e && e.name === 'TimeoutError' ? `Google took too long to answer on ${model}. Try again.` : 'Could not reach Google: ' + (e && e.message)), { geminiStatus: 504 }); }
+    j = await res.json().catch(() => ({}));
+  }
   if (!res.ok) throw Object.assign(new Error(j.error?.message || `Gemini returned ${res.status}`), { geminiStatus: res.status });
   const cand = j.candidates?.[0];
   if (!cand || j.promptFeedback?.blockReason) return { content: [], stop_reason: 'refusal', stop_details: { explanation: j.promptFeedback?.blockReason || 'blocked' } };

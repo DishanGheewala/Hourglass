@@ -18,10 +18,10 @@ export default async function handler(req, res) {
     const headers = { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY };
     const t0 = Date.now();
     try {
-      const r = await fetch(`${base}/${out.gemini_model}:generateContent`, { method: 'POST', headers, signal: AbortSignal.timeout(25000), body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Say hi in three words.' }] }] }) });
-      const j = await r.json().catch(() => ({}));
-      out.test = { status: r.status, ms: Date.now() - t0, reply: j.candidates?.[0]?.content?.parts?.map(p => p.text).filter(Boolean).join(' ').slice(0, 80), error: j.error?.message?.slice(0, 200) };
-    } catch (e) { out.test = { error: `${e.name}: ${e.message}`, ms: Date.now() - t0 }; }
+      const { geminiChat } = await import('./_gemini.js');
+      const r = await geminiChat({ system: 'You are a helpful assistant. Keep replies short.', tools: [], messages: [{ role: 'user', content: 'Say hi in three words.' }], apiKey: process.env.GEMINI_API_KEY, model: out.gemini_model });
+      out.test = { status: 200, ms: Date.now() - t0, reply: r.content.map(c => c.text).filter(Boolean).join(' ').slice(0, 80) };
+    } catch (e) { out.test = { status: e.geminiStatus || null, error: `${e.name}: ${String(e.message).slice(0, 200)}`, ms: Date.now() - t0 }; }
     try {
       const r = await fetch(`${base}?pageSize=200`, { headers, signal: AbortSignal.timeout(10000) });
       const j = await r.json().catch(() => ({}));
