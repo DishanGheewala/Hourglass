@@ -41,14 +41,31 @@ function toContents(messages) {
   return out;
 }
 
+// If the configured model has been retired (404), find a current Gemini Flash model on this key and use that.
+let fallbackModel = null;
+async function findFlashModel(apiKey, fetchImpl) {
+  const res = await fetchImpl(`${BASE}?pageSize=200`, { headers: { 'x-goog-api-key': apiKey } });
+  if (!res.ok) return null;
+  const j = await res.json().catch(() => ({}));
+  const ok = (j.models || []).filter(m => (m.supportedGenerationMethods || []).includes('generateContent') && /^models\/gemini-[\d.]+-flash$/.test(m.name));
+  ok.sort((a, b) => parseFloat(b.name.match(/gemini-([\d.]+)/)[1]) - parseFloat(a.name.match(/gemini-([\d.]+)/)[1]));
+  return ok[0] ? ok[0].name.replace('models/', '') : null;
+}
+
 export async function geminiChat({ system, tools, messages, apiKey, model, fetchImpl = fetch }) {
+  model = fallbackModel || model;
   const body = {
     systemInstruction: { parts: [{ text: system }] },
     contents: toContents(messages),
     tools: [{ functionDeclarations: tools.filter(t => t.input_schema).map(toDecl) }],
     generationConfig: { maxOutputTokens: 8192 }
   };
-  const res = await fetchImpl(`${BASE}/${model}:generateContent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey }, body: JSON.stringify(body) });
+  const call = m => fetchImpl(`${BASE}/${m}:generateContent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey }, body: JSON.stringify(body) });
+  let res = await call(model);
+  if (res.status === 404 && !fallbackModel) {
+    const alt = await findFlashModel(apiKey, fetchImpl).catch(() => null);
+    if (alt && alt !== model) { fallbackModel = alt; model = alt; res = await call(model); }
+  }
   const j = await res.json().catch(() => ({}));
   if (!res.ok) throw Object.assign(new Error(j.error?.message || `Gemini returned ${res.status}`), { geminiStatus: res.status });
   const cand = j.candidates?.[0];

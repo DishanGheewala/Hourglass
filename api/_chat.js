@@ -264,7 +264,7 @@ export default async function handler(req, res) {
     res.status(200).json({ content: r.content, stop_reason: r.stop_reason, stop_details: r.stop_details ?? null });
   } catch (err) {
     if (err.geminiStatus === 429) return sendError(res, Object.assign(new Error('The free AI is busy right now (free keys have a per-minute limit). Wait a minute and try again.'), { status: 429 }));
-    if (err.geminiStatus === 400 || err.geminiStatus === 403 || err.geminiStatus === 404) { console.error(err.message); return sendError(res, Object.assign(new Error('The AI key or model in Vercel is not valid. Check GEMINI_API_KEY (SETUP.md, step 3).'), { status: 500 })); }
+    if (err.geminiStatus) { console.error('gemini', err.geminiStatus, err.message); return sendError(res, Object.assign(new Error(`Google's AI said (${err.geminiStatus}): ${String(err.message).slice(0, 220)}`), { status: 502 })); }
     if (err instanceof Anthropic.RateLimitError) return sendError(res, Object.assign(new Error('The AI is busy right now. Try again in a minute.'), { status: 429 }));
     if (err instanceof Anthropic.AuthenticationError) return sendError(res, Object.assign(new Error('The AI key in Vercel is not valid.'), { status: 500 }));
     if (err instanceof Anthropic.BadRequestError) { console.error(err); return sendError(res, Object.assign(new Error('The AI could not read this chat. Start a new chat and try again.'), { status: 400 })); }
