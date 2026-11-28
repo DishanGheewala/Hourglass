@@ -14,7 +14,7 @@ export default async function handler(req, res) {
     if (!subs.length) throw Object.assign(new Error('Turn on alerts for this device first.'), { status: 400 });
     const v = await getVapid();
     const vapidDetails = { subject: vapidSubject(), publicKey: v.publicKey, privateKey: v.privateKey };
-    const payload = JSON.stringify({ title: 'Hourglass', body: 'Test alert: reminders are working.', url: '/app/', tag: 'hg-test' });
+    const payload = JSON.stringify({ title: 'Hourglass', body: 'Test alert: reminders are working.', url: '/app/', tag: 'hg-test-' + Date.now() });
     let sent = 0; const dead = new Set();
     for (const s of subs) {
       try { await sendNotification(s, payload, { vapidDetails, TTL: 600 }); sent++; }

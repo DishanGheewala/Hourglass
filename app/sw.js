@@ -10,6 +10,7 @@ self.addEventListener('push', e => {
     icon: 'icon.svg',
     badge: 'icon.svg',
     tag: d.tag || 'hourglass',
+    renotify: true, // a new alert with the same tag still pops up (instead of replacing the old one silently)
     data: { url: d.url || '/app/' }
   }));
 });
