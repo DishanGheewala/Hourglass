@@ -111,7 +111,8 @@ function setupReminderTimer() {
 }
 
 function sendDueReminders() {
-  const r = UrlFetchApp.fetch(APP_URL + '/api/reminders?key=' + encodeURIComponent(CRON_SECRET), { muteHttpExceptions: true });
+  const base = APP_URL.replace(/\/app\/?$/, '').replace(/\/$/, ''); // works with or without a trailing /app/
+  const r = UrlFetchApp.fetch(base + '/api/reminders?key=' + encodeURIComponent(CRON_SECRET), { muteHttpExceptions: true });
   console.log(r.getResponseCode() + ' ' + r.getContentText());
 }
 

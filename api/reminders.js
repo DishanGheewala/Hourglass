@@ -2,7 +2,9 @@
 // Called every 5 minutes by a free timer (the Apps Script trigger in apps-script.gs, SETUP.md step 5),
 // so alerts arrive even when the app is closed.
 import { sendNotification } from 'web-push';
-import { admin, sendError } from './_lib.js';
+import { sendError } from './_lib.js';
+import { listDocs, patchData } from './_fs.js';
+import { getVapid, vapidSubject } from './_push.js';
 
 export const config = { maxDuration: 60 };
 const WINDOW_MIN = 45; // send a missed alert up to 45 minutes late, never twice in one day
@@ -24,15 +26,12 @@ export default async function handler(req, res) {
     const secret = process.env.CRON_SECRET;
     const given = req.query.key || (req.headers.authorization || '').replace(/^Bearer /, '');
     if (!secret || given !== secret) return res.status(401).json({ error: 'bad key' });
-    const { VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT } = process.env;
-    if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) throw new Error('VAPID keys are not set in Vercel.');
-    const vapidDetails = { subject: VAPID_SUBJECT || 'mailto:admin@example.com', publicKey: VAPID_PUBLIC_KEY, privateKey: VAPID_PRIVATE_KEY };
-
-    const { db } = await admin();
-    const snap = await db.collection('users').select('alerts', 'subs', 'tz', 'sent').get();
+    const v = await getVapid();
+    const vapidDetails = { subject: vapidSubject(), publicKey: v.publicKey, privateKey: v.privateKey };
+    const users = await listDocs('users', ['alerts', 'subs', 'tz', 'sent']);
     let sent = 0;
-    for (const doc of snap.docs) {
-      const d = doc.data();
+    for (const u of users) {
+      const d = u.data;
       const subs = Array.isArray(d.subs) ? d.subs : [];
       if (!subs.length || !Array.isArray(d.alerts)) continue;
       const now = localNow(d.tz || 'UTC');
@@ -53,7 +52,7 @@ export default async function handler(req, res) {
       }
       const update = { sent: done };
       if (dead.size) update.subs = subs.filter(s => !dead.has(s.endpoint));
-      await doc.ref.update(update);
+      await patchData(`users/${u.id}`, update);
     }
     res.status(200).json({ ok: true, sent });
   } catch (err) { sendError(res, err); }

@@ -2,7 +2,8 @@
 // The browser runs the tool loop (its tools use the student's own Firestore data and Google sign-in),
 // and this function only adds the secret API key, the fixed system prompt and the tool list.
 import Anthropic from '@anthropic-ai/sdk';
-import { admin, hasAdmin, requireUser, sendError, readJson } from './_lib.js';
+import { hasAdmin, requireUser, sendError, readJson } from './_lib.js';
+import { getData, patchData } from './_fs.js';
 import { geminiChat } from './_gemini.js';
 
 export const config = { maxDuration: 60 };
@@ -269,17 +270,14 @@ function isSimple(messages) {
 
 async function countUsage(uid) {
   if (!hasAdmin()) return true; // the daily limit needs the optional service account
-  const { db } = await admin();
-  const day = new Date().toISOString().slice(0, 10);
-  const ref = db.doc(`usage/${uid}`);
-  return db.runTransaction(async t => {
-    const snap = await t.get(ref);
-    const d = snap.exists ? snap.data() : {};
+  try {
+    const day = new Date().toISOString().slice(0, 10);
+    const d = (await getData(`usage/${uid}`)) || {};
     const count = d.day === day ? d.count || 0 : 0;
     if (count >= DAILY_LIMIT) return false;
-    t.set(ref, { day, count: count + 1, updatedAt: new Date() });
+    await patchData(`usage/${uid}`, { day, count: count + 1 });
     return true;
-  });
+  } catch (e) { console.error('usage counter failed (allowing the request)', e.message); return true; }
 }
 
 export default async function handler(req, res) {

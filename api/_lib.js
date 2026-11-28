@@ -3,17 +3,8 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 export const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'hourglass-4f6f9';
 
-// Full admin access (needed only for push alerts and the AI daily limit). Optional.
-// firebase-admin is loaded only when needed, so the AI chat never depends on it.
+// The service account (optional) is only needed for alerts and the AI daily limit; see _fs.js.
 export const hasAdmin = () => !!process.env.FIREBASE_SERVICE_ACCOUNT;
-export async function admin() {
-  if (!hasAdmin()) throw Object.assign(new Error('Alerts need FIREBASE_SERVICE_ACCOUNT in Vercel (SETUP.md, step 5).'), { status: 503 });
-  const { initializeApp, cert, getApps } = await import('firebase-admin/app');
-  const { getFirestore } = await import('firebase-admin/firestore');
-  let app = getApps().find(a => a.name === '[DEFAULT]');
-  if (!app) app = initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
-  return { db: getFirestore(app) };
-}
 
 // Checks the Firebase sign-in token the browser sends. Needs no secret: only Google's public keys.
 const KEYS = createRemoteJWKSet(new URL('https://www.googleapis.com/robot/v1/metadata/jwk/securetoken@system.gserviceaccount.com'));

@@ -60,15 +60,18 @@ Variables** (Production), then **Deployments → ⋯ → Redeploy**. When a key 
 5. Anyone who linked before this update should **Unlink**, then **Link** again to grant the new permissions.
 
 ## 5. Optional: alerts when the app is closed
-Needs three things on top of the above.
-1. **Firebase service account:** Firebase → ⚙ Project settings → Service accounts → **Generate new private key**. In Vercel add
-   `FIREBASE_SERVICE_ACCOUNT` = the whole contents of that JSON file.
-2. **Push keys:** run `npx web-push generate-vapid-keys`; add `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`
-   (`mailto:you@gmail.com`) and `CRON_SECRET` (any long random string) in Vercel. Redeploy.
-3. **Timer:** Vercel's free plan can't run a job every few minutes, so the Apps Script from step 2 does it. In `apps-script.gs`
-   set `APP_URL` (your Vercel address) and `CRON_SECRET` (same value as in Vercel), save, then run `setupReminderTimer` once.
-   Do not commit the secret to GitHub.
-Then in the app: **Settings → Reminder alerts → Turn on alerts for this device → Send me a test alert.**
+Two settings in Vercel plus two lines in your Apps Script. The server makes its own push keys, so there is nothing else to paste.
+1. **Service account:** Firebase → ⚙ Project settings → **Service accounts** → **Generate new private key** → Generate. Open the downloaded
+   `.json` file in a text editor, select everything and copy it. It is a master key to your database: never share it, post it, or
+   commit it to GitHub, and delete the file afterwards.
+2. **Vercel → Settings → Environment Variables** (Production), then redeploy:
+   - `FIREBASE_SERVICE_ACCOUNT` = the whole contents of that file.
+   - `CRON_SECRET` = any long random string (letters and numbers).
+3. **Timer** (Vercel's free plan can't run a job every few minutes, so your Apps Script does it): in `apps-script.gs` set `APP_URL` to your
+   Vercel address and `CRON_SECRET` to the same string as in Vercel, Save, choose `setupReminderTimer`, **Run**, and approve. It then calls your
+   app every 5 minutes. Do not commit the secret to GitHub.
+4. In the app: **Settings → Reminder alerts → Turn on alerts for this device → Send me a test alert.**
+
 iPhone/iPad (iOS 16.4+) only allow alerts after **Share → Add to Home Screen**, then opening Hourglass from the icon.
 
 ## Apple Calendar
