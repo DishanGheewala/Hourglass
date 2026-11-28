@@ -41,21 +41,13 @@ function toContents(messages) {
   return out;
 }
 
-// If the configured model has been retired (404), find a current Gemini Flash model on this key and use that.
-let fallbackModel = null;
-async function findFlashModel(apiKey, fetchImpl) {
-  const res = await fetchImpl(`${BASE}?pageSize=200`, { headers: { 'x-goog-api-key': apiKey } });
-  if (!res.ok) return null;
-  const j = await res.json().catch(() => ({}));
-  const ok = (j.models || []).filter(m => (m.supportedGenerationMethods || []).includes('generateContent') && /^models\/gemini-(flash-latest|[\d.]+-flash)$/.test(m.name));
-  const latest = ok.find(m => m.name === 'models/gemini-flash-latest');
-  if (latest) return 'gemini-flash-latest';
-  ok.sort((a, b) => parseFloat(b.name.match(/gemini-([\d.]+)/)[1]) - parseFloat(a.name.match(/gemini-([\d.]+)/)[1]));
-  return ok[0] ? ok[0].name.replace('models/', '') : null;
-}
+// Google's models are sometimes busy (503), over quota (429) or retired (404). Try the next one.
+const CANDIDATES = ['gemini-flash-latest', 'gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-2.5-flash-lite'];
+let goodModel = null; // the last model that worked on this server instance
+const RETRY = new Set([404, 429, 500, 502, 503, 504]);
+const slow = m => Object.assign(new Error(`Google took too long to answer on ${m}. Try again.`), { geminiStatus: 504 });
 
 export async function geminiChat({ system, tools, messages, apiKey, model, fetchImpl = fetch }) {
-  model = fallbackModel || model;
   const body = {
     systemInstruction: { parts: [{ text: system }] },
     contents: toContents(messages),
@@ -63,25 +55,32 @@ export async function geminiChat({ system, tools, messages, apiKey, model, fetch
     // Newer Gemini models "think" before answering, which can take very long. Ask for little thinking.
     generationConfig: { maxOutputTokens: 4096, thinkingConfig: { thinkingLevel: 'low' } }
   };
-  const call = m => fetchImpl(`${BASE}/${m}:generateContent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey }, body: JSON.stringify(body), signal: AbortSignal.timeout(50000) });
-  let res;
-  try { res = await call(model); }
-  catch (e) { throw Object.assign(new Error(e && e.name === 'TimeoutError' ? `Google took too long to answer on ${model}. Try again.` : 'Could not reach Google: ' + (e && e.message)), { geminiStatus: 504 }); }
-  if (res.status === 404 && !fallbackModel) {
-    const alt = await findFlashModel(apiKey, fetchImpl).catch(() => null);
-    if (alt && alt !== model) {
-      fallbackModel = alt; model = alt;
-      try { res = await call(model); }
-      catch (e) { throw Object.assign(new Error(e && e.name === 'TimeoutError' ? `Google took too long to answer on ${model}. Try again.` : 'Could not reach Google: ' + (e && e.message)), { geminiStatus: 504 }); }
-    }
+  const deadline = Date.now() + 52000;
+  const call = async m => {
+    const left = deadline - Date.now();
+    if (left < 4000) throw slow(m);
+    try { return await fetchImpl(`${BASE}/${m}:generateContent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey }, body: JSON.stringify(body), signal: AbortSignal.timeout(Math.min(left, 22000)) }); }
+    catch (e) { if (e && e.name === 'TimeoutError') throw slow(m); throw Object.assign(new Error('Could not reach Google: ' + (e && e.message)), { geminiStatus: 504 }); }
+  };
+
+  const order = [...new Set([goodModel, model, ...CANDIDATES].filter(Boolean))];
+  let j, res, used, lastErr;
+  for (const m of order) {
+    try {
+      res = await call(m);
+      j = await res.json().catch(() => ({}));
+      if (res.status === 400 && /think/i.test(j.error?.message || '')) { // this model doesn't take that setting
+        delete body.generationConfig.thinkingConfig;
+        res = await call(m);
+        j = await res.json().catch(() => ({}));
+      }
+    } catch (e) { lastErr = e; if (e.geminiStatus === 504 && Date.now() >= deadline - 4000) break; continue; }
+    if (res.ok) { used = m; break; }
+    lastErr = Object.assign(new Error(j.error?.message || `Gemini returned ${res.status}`), { geminiStatus: res.status });
+    if (!RETRY.has(res.status)) break; // e.g. a bad key (400/403): another model won't help
   }
-  let j = await res.json().catch(() => ({}));
-  if (res.status === 400 && /think/i.test(j.error?.message || '')) {
-    delete body.generationConfig.thinkingConfig;
-    try { res = await call(model); } catch (e) { throw Object.assign(new Error(e && e.name === 'TimeoutError' ? `Google took too long to answer on ${model}. Try again.` : 'Could not reach Google: ' + (e && e.message)), { geminiStatus: 504 }); }
-    j = await res.json().catch(() => ({}));
-  }
-  if (!res.ok) throw Object.assign(new Error(j.error?.message || `Gemini returned ${res.status}`), { geminiStatus: res.status });
+  if (!used) throw lastErr || slow(model);
+  goodModel = used;
   const cand = j.candidates?.[0];
   if (!cand || j.promptFeedback?.blockReason) return { content: [], stop_reason: 'refusal', stop_details: { explanation: j.promptFeedback?.blockReason || 'blocked' } };
   const content = [];
@@ -97,6 +96,6 @@ export async function geminiChat({ system, tools, messages, apiKey, model, fetch
   let stop = calls ? 'tool_use' : 'end_turn';
   if (!calls && cand.finishReason === 'MAX_TOKENS') stop = 'max_tokens';
   if (!calls && !content.length && ['SAFETY', 'PROHIBITED_CONTENT', 'RECITATION', 'BLOCKLIST'].includes(cand.finishReason)) stop = 'refusal';
-  return { content, stop_reason: stop, stop_details: null };
+  return { content, stop_reason: stop, stop_details: null, model: used };
 }
 export const _test = { toContents };

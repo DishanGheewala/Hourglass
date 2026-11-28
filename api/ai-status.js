@@ -20,7 +20,7 @@ export default async function handler(req, res) {
     try {
       const { geminiChat } = await import('./_gemini.js');
       const r = await geminiChat({ system: 'You are a helpful assistant. Keep replies short.', tools: [], messages: [{ role: 'user', content: 'Say hi in three words.' }], apiKey: process.env.GEMINI_API_KEY, model: out.gemini_model });
-      out.test = { status: 200, ms: Date.now() - t0, reply: r.content.map(c => c.text).filter(Boolean).join(' ').slice(0, 80) };
+      out.test = { status: 200, ms: Date.now() - t0, model_used: r.model, reply: r.content.map(c => c.text).filter(Boolean).join(' ').slice(0, 80) };
     } catch (e) { out.test = { status: e.geminiStatus || null, error: `${e.name}: ${String(e.message).slice(0, 200)}`, ms: Date.now() - t0 }; }
     try {
       const r = await fetch(`${base}?pageSize=200`, { headers, signal: AbortSignal.timeout(10000) });
