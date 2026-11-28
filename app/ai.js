@@ -24,6 +24,7 @@ let busy = false;
 let loadedFor = null;
 let replyTimer = null;
 let turnStart = 0;
+let editing = -1; // index of the bubble being edited
 
 const aiCol = () => collection(D.db, 'users', D.state.user.uid, 'ai');
 const chatDoc = id => doc(D.db, 'users', D.state.user.uid, 'ai', id);
@@ -129,6 +130,7 @@ async function saveNotes() {
   localNotes(notes);
 }
 export async function newChat() {
+  editing = -1;
   if (busy) return D.toast('Wait for the answer to finish first.');
   if (!chat.messages.length) { closeSide(); return; } // already a new chat
   chat = blankChat(); attach = [];
@@ -136,6 +138,7 @@ export async function newChat() {
   render(); renderSide(); renderAttach(); closeSide();
 }
 async function openChat(id) {
+  editing = -1;
   if (busy) return D.toast('Wait for the answer to finish first.');
   if (!cache[id]) return;
   try { chat = fromData(id, cache[id]); } catch { return; }
@@ -215,10 +218,18 @@ function md(src) {
 
 const emailOnly = from => (String(from).match(/<([^>]+)>/) || [, from])[1].trim();
 
+const editBtn = (it, i) => (it.mi != null && !busy ? `<button class="editbtn" data-action="ai-edit" data-i="${i}" aria-label="Edit this message" title="Edit"><svg class="i sm" aria-hidden="true"><use href="#i-edit"/></svg></button>` : '');
+function editorHTML(it, i, isUser) {
+  return `<div class="msg ${isUser ? 'user' : 'ai'} editing"><textarea id="ai-edit-box" rows="4" maxlength="8000" aria-label="Edit message">${esc(it.text)}</textarea>
+    <p class="muted">${isUser ? 'Saving sends this again and replaces everything after it.' : 'Saving changes this reply.'}</p>
+    <div class="row"><button class="primary" data-action="ai-edit-save" data-i="${i}">${isUser ? 'Save and send' : 'Save'}</button><button class="btn" data-action="ai-edit-cancel">Cancel</button></div></div>`;
+}
 function itemHTML(it, i) {
   switch (it.kind) {
-    case 'user': return `<div class="msg user">${(it.imgs || []).length ? `<div class="imgs">${it.imgs.map(u => `<img src="${esc(u)}" alt="Image you shared">`).join('')}</div>` : ''}${it.text ? esc(it.text).replace(/\n/g, '<br>') : ''}</div>`;
-    case 'ai': return `<div class="msg ai">${md(it.text)}</div>`;
+    case 'user': if (editing === i) return editorHTML(it, i, true);
+      return `<div class="msg user">${editBtn(it, i)}${(it.imgs || []).length ? `<div class="imgs">${it.imgs.map(u => `<img src="${esc(u)}" alt="Image you shared">`).join('')}</div>` : ''}${it.text ? esc(it.text).replace(/\n/g, '<br>') : ''}</div>`;
+    case 'ai': if (editing === i) return editorHTML(it, i, false);
+      return `<div class="msg ai">${editBtn(it, i)}${md(it.text)}</div>`;
     case 'status': return `<div class="msg status">${esc(it.text)}</div>`;
     case 'error': return `<div class="msg ai err-msg">${esc(it.text)}</div>`;
     case 'notice': return `<div class="msg ai notice"><p><b>${esc(emailOnly(it.from))}</b> responded to your email${it.subject ? ` “${esc(it.subject)}”` : ''}:</p><blockquote>${esc(it.body).replace(/\n/g, '<br>')}</blockquote></div>`;
@@ -289,6 +300,7 @@ function render() {
   log.innerHTML = chat.display.map(itemHTML).join('') + suggest + (busy ? '<div class="msg status" id="ai-working"><span class="typing"><i></i><i></i><i></i></span> <span id="ai-wtext"></span></div>' : '');
   log.scrollTop = log.scrollHeight;
   const t = $('#ai-title'); if (t) t.textContent = chat.title || 'New chat';
+  const box = $('#ai-edit-box'); if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); box.scrollIntoView({ block: 'nearest' }); }
 }
 function setWorking(text) { const w = $('#ai-wtext'); if (w) w.textContent = text; }
 function show(item) { chat.display.push(item); render(); }
@@ -531,6 +543,7 @@ export async function ask(text, images = []) {
   // Start a fresh thread (keeping the visible history) when the saved one gets too large.
   if (JSON.stringify(stripImages(chat.messages)).length > MAX_SAVED_CHARS) {
     chat.messages = [];
+    chat.display.forEach(d => { delete d.mi; });
     chat.display.push({ kind: 'status', text: 'Started a fresh conversation thread. I still remember the notes I saved about you.' });
   }
   if (chat.display.length > 150) chat.display = chat.display.slice(-150);
@@ -542,7 +555,7 @@ export async function ask(text, images = []) {
   const blocks = [...notices, ...images.map(im => ({ type: 'image', source: { type: 'base64', media_type: im.mime, data: im.data } })), { type: 'text', text: text || 'Please look at the image I shared.' }];
   chat.messages.push({ role: 'user', content: blocks });
   chat.messages.push({ role: 'system', content: contextText() });
-  chat.display.push({ kind: 'user', text, imgs: images.map(im => im.thumb) });
+  chat.display.push({ kind: 'user', text, imgs: images.map(im => im.thumb), mi: startLen });
   render(); renderSide();
   let ok = false, firstReply = '';
   try {
@@ -551,7 +564,7 @@ export async function ask(text, images = []) {
       const content = r.content?.length ? r.content : [{ type: 'text', text: '…' }];
       chat.messages.push({ role: 'assistant', content });
       const said = content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
-      if (said && said !== '…') { show({ kind: 'ai', text: said }); if (!firstReply) firstReply = said; }
+      if (said && said !== '…') { show({ kind: 'ai', text: said, mi: chat.messages.length - 1 }); if (!firstReply) firstReply = said; }
       if (r.stop_reason === 'refusal') { if (!said) show({ kind: 'ai', text: "I can't help with that one, but I'm happy to help with something else." }); break; }
       if (r.stop_reason === 'pause_turn') continue;
       if (r.stop_reason === 'tool_use') {
@@ -667,6 +680,29 @@ export const aiActions = {
     const missed = it.items.map((q, n) => (norm(answers[n]) === norm(q.answer) ? null : `"${q.scenario}" (answered "${answers[n] || 'blank'}", correct "${q.answer}")`)).filter(Boolean);
     chat.pending.push(`The student submitted the vocabulary test "${it.title}": ${it.score}/${it.items.length}.${missed.length ? ' Missed: ' + missed.join('; ') : ''}`);
     render(); await saveChat();
+  },
+  'ai-edit': b => { if (busy) return D.toast('Wait for the answer to finish first.'); editing = +b.dataset.i; render(); },
+  'ai-edit-cancel': () => { editing = -1; render(); },
+  'ai-edit-save': async b => {
+    if (busy) return D.toast('Wait for the answer to finish first.');
+    const i = +b.dataset.i, it = chat.display[i];
+    const text = ($('#ai-edit-box')?.value || '').trim();
+    editing = -1;
+    if (!it || it.mi == null) return render();
+    const m = chat.messages[it.mi];
+    if (it.kind === 'ai') { // change the reply the AI "said", in the screen and in its memory of the chat
+      if (!text) { render(); return D.toast('A reply cannot be empty.'); }
+      it.text = text;
+      if (m && m.role === 'assistant' && Array.isArray(m.content)) m.content = [{ type: 'text', text }, ...m.content.filter(c => c.type !== 'text')];
+      render(); await saveChat(); return;
+    }
+    // your own message: start again from here with the new wording
+    const images = (m && Array.isArray(m.content) ? m.content.filter(c => c.type === 'image') : []).map((c, k) => ({ data: c.source.data, mime: c.source.media_type, thumb: (it.imgs || [])[k] || '' }));
+    if (!text && !images.length) { render(); return D.toast('A message cannot be empty.'); }
+    chat.messages.length = it.mi;
+    chat.display.length = i;
+    chat.pending = [];
+    await ask(text, images);
   },
   'ai-new': () => newChat(),
   'ai-history': () => $('#ai-wrap')?.classList.toggle('open'),
