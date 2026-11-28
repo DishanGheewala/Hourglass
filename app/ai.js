@@ -297,7 +297,7 @@ function render() {
     ['Summarize my unread emails from the last 3 days.', 'Summarize my emails'],
     ['Make me a practice quiz from my notes in Google Drive.', 'Quiz me from Drive']
   ].map(([t, l]) => `<button class="chip" data-action="chip" data-text="${esc(t)}">${esc(l)}</button>`).join('')}</div>` : '';
-  log.innerHTML = chat.display.map(itemHTML).join('') + suggest + (busy ? '<div class="msg status" id="ai-working"><span class="typing"><i></i><i></i><i></i></span> <span id="ai-wtext"></span></div>' : '');
+  log.innerHTML = chat.display.map(itemHTML).join('') + suggest + (busy && !(chat.display[chat.display.length - 1]?.kind === 'ai' && chat.display[chat.display.length - 1].mi == null && chat.display[chat.display.length - 1].text) ? '<div class="msg status" id="ai-working"><span class="typing"><i></i><i></i><i></i></span> <span id="ai-wtext"></span></div>' : '');
   log.scrollTop = log.scrollHeight;
   const t = $('#ai-title'); if (t) t.textContent = chat.title || 'New chat';
   const box = $('#ai-edit-box'); if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); box.scrollIntoView({ block: 'nearest' }); }
@@ -494,9 +494,32 @@ let useLocal = false;
 // Images are sent only with the turn they belong to; earlier ones are replaced by a note (keeps requests small).
 const forServer = messages => messages.map((m, i) => i < turnStart && Array.isArray(m.content) && m.content.some(b => b.type === 'image')
   ? { ...m, content: m.content.map(b => (b.type === 'image' ? { type: 'text', text: '[Image shared earlier: no longer shown]' } : b)) } : m);
-async function callServer() {
+async function callServer(onDelta) {
   const token = await D.state.user.getIdToken();
-  const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ messages: forServer(chat.messages), linked: D.state.profile?.linked || {} }), signal: AbortSignal.timeout(75000) }).catch(e => { throw new Error(e && e.name === 'TimeoutError' ? 'The AI took too long to answer. Please try again.' : 'Could not reach the AI server. Check your connection.'); });
+  const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ messages: forServer(chat.messages), linked: D.state.profile?.linked || {}, stream: true }), signal: AbortSignal.timeout(75000) }).catch(e => { throw new Error(e && e.name === 'TimeoutError' ? 'The AI took too long to answer. Please try again.' : 'Could not reach the AI server. Check your connection.'); });
+  if ((res.headers.get('content-type') || '').includes('ndjson') && res.body) { // an answer arriving word by word
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = '', done = null;
+    const handle = line => {
+      if (!line.trim()) return;
+      let o; try { o = JSON.parse(line); } catch { return; }
+      if (o.t === 'text') onDelta?.(o.d);
+      else if (o.t === 'done') done = o;
+      else if (o.t === 'error') throw new Error(o.error || 'The AI stopped part-way. Try again.');
+    };
+    try {
+      for (;;) {
+        const { value, done: end } = await reader.read();
+        if (value) buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0) { handle(buf.slice(0, i)); buf = buf.slice(i + 1); }
+        if (end) break;
+      }
+      handle(buf);
+    } catch (e) { throw new Error(e && e.name === 'TimeoutError' ? 'The AI took too long to answer. Please try again.' : (e.message || 'The AI stopped part-way. Try again.')); }
+    if (!done) throw new Error('The AI stopped part-way. Try again.');
+    return done;
+  }
   let data = {};
   try { data = await res.json(); } catch {}
   if ((res.status === 503 && /not set up/i.test(data.error || '')) || res.status === 404) throw Object.assign(new Error('not set up'), { notSetUp: true, detail: res.status === 404 ? 'the AI server was not found (404)' : (data.error || 'no key set') });
@@ -523,9 +546,9 @@ async function callLocal() {
   for (const c of calls) content.push({ type: 'tool_use', id: 'call_' + Math.random().toString(36).slice(2, 12), name: c.name, input: c.input });
   return { content, stop_reason: calls.length ? 'tool_use' : 'end_turn', stop_details: null };
 }
-async function callModel() {
+async function callModel(onDelta) {
   if (!useLocal) {
-    try { return await callServer(); }
+    try { return await callServer(onDelta); }
     catch (e) {
       if (!e.notSetUp) throw e;
       useLocal = true;
@@ -560,11 +583,19 @@ export async function ask(text, images = []) {
   let ok = false, firstReply = '';
   try {
     for (let step = 0; step < (useLocal ? 6 : MAX_STEPS); step++) {
-      const r = await callModel();
+      let live = null;
+      const onDelta = d => { // show words as they arrive
+        if (!live) { live = { kind: 'ai', text: '' }; chat.display.push(live); }
+        live.text += d; render();
+      };
+      let r;
+      try { r = await callModel(onDelta); }
+      catch (e) { if (live) chat.display.splice(chat.display.indexOf(live), 1); throw e; }
       const content = r.content?.length ? r.content : [{ type: 'text', text: '…' }];
       chat.messages.push({ role: 'assistant', content });
       const said = content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
-      if (said && said !== '…') { show({ kind: 'ai', text: said, mi: chat.messages.length - 1 }); if (!firstReply) firstReply = said; }
+      if (live) { if (said && said !== '…') { live.text = said; live.mi = chat.messages.length - 1; if (!firstReply) firstReply = said; render(); } else chat.display.splice(chat.display.indexOf(live), 1); }
+      else if (said && said !== '…') { show({ kind: 'ai', text: said, mi: chat.messages.length - 1 }); if (!firstReply) firstReply = said; }
       if (r.stop_reason === 'refusal') { if (!said) show({ kind: 'ai', text: "I can't help with that one, but I'm happy to help with something else." }); break; }
       if (r.stop_reason === 'pause_turn') continue;
       if (r.stop_reason === 'tool_use') {

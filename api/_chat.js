@@ -249,6 +249,24 @@ function toolsFor(linked = {}) {
   return TOOLS.filter(t => t.input_schema && !hidden.has(t.name));
 }
 
+// Short, everyday messages go to a small fast model with a short tool list; anything that needs real work goes to the full model.
+const CORE_TOOLS = new Set(['log_time', 'delete_log', 'add_deadline', 'list_deadlines', 'delete_deadline', 'set_reminders', 'remember', 'forget', 'get_logs']);
+const coreTools = () => TOOLS.filter(t => t.input_schema && CORE_TOOLS.has(t.name));
+const COMPLEX = /quiz|test|vocab|email|e-mail|summar|study|essay|plan|drive|doc\b|docs\b|slide|sheet|pdf|calendar|schedule|explain|write|draft|make|create|generate|flashcard|outline|analy[sz]e|compare|translate|homework|solve|research|search|find|list|why|how\b/i;
+function isSimple(messages) {
+  // Judge the student's actual request (the latest message that has typed text), even while the AI is mid-task.
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== 'user' || !Array.isArray(m.content)) continue;
+    const texts = m.content.filter(b => b.type === 'text' && !String(b.text).startsWith('[Automatic notice')).map(b => b.text);
+    if (!texts.length) continue; // only tool results
+    if (m.content.some(b => b.type === 'image')) return false;
+    const text = texts.join(' ').trim();
+    return text.length > 0 && text.length <= 140 && !COMPLEX.test(text);
+  }
+  return false;
+}
+
 async function countUsage(uid) {
   if (!hasAdmin()) return true; // the daily limit needs the optional service account
   const { db } = await admin();
@@ -270,14 +288,14 @@ export default async function handler(req, res) {
     const which = provider();
     if (!which) throw Object.assign(new Error('The AI is not set up yet: add GEMINI_API_KEY (free) or ANTHROPIC_API_KEY in Vercel (SETUP.md, step 3).'), { status: 503 });
     const user = await requireUser(req);
-    const { messages, title, linked } = await readJson(req);
+    const { messages, title, linked, stream } = await readJson(req);
     if (!Array.isArray(messages) || !messages.length) throw Object.assign(new Error('No messages.'), { status: 400 });
     if (JSON.stringify(messages).length > 4_000_000) throw Object.assign(new Error('This chat is too long. Start a new chat.'), { status: 413 });
     if (messages.some(m => !['user', 'assistant', 'system'].includes(m?.role))) throw Object.assign(new Error('Bad message.'), { status: 400 });
     if (title) { // a short automatic name for a chat
       const TITLE_SYSTEM = 'You name chats. Write a very short title (2 to 5 words, no quotes, no ending punctuation) that says what the chat is about. Reply with only the title.';
       if (which === 'gemini') {
-        const r = await geminiChat({ system: TITLE_SYSTEM, tools: [], messages: messages.slice(-2), apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-flash-latest' });
+        const r = await geminiChat({ system: TITLE_SYSTEM, tools: [], messages: messages.slice(-2), apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-flash-latest', fast: true });
         return res.status(200).json({ content: r.content, stop_reason: 'end_turn' });
       }
       const r = await client.beta.messages.create({ model: MODEL, max_tokens: 60, output_config: { effort: 'low' }, system: TITLE_SYSTEM, messages: messages.slice(-2) });
@@ -286,11 +304,25 @@ export default async function handler(req, res) {
     if (!(await countUsage(user.uid))) throw Object.assign(new Error(`You've reached today's limit of ${DAILY_LIMIT} AI steps. It resets tomorrow.`), { status: 429 });
 
     if (which === 'gemini') {
-      const r = await geminiChat({
+      const fast = isSimple(messages);
+      const opts = {
         system: SYSTEM.replace(' Use web search when current or factual information would help.', ''),
-        tools: toolsFor(linked), messages, apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-flash-latest'
-      });
-      return res.status(200).json(r);
+        tools: fast ? coreTools() : toolsFor(linked), messages, apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-flash-latest', fast
+      };
+      if (!stream) return res.status(200).json(await geminiChat(opts));
+      // Stream the answer to the browser as it is written (one JSON object per line).
+      let started = false;
+      const begin = () => { if (started) return; started = true; res.statusCode = 200; res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8'); res.setHeader('Cache-Control', 'no-store, no-transform'); res.setHeader('X-Accel-Buffering', 'no'); res.flushHeaders?.(); };
+      const line = o => res.write(JSON.stringify(o) + '\n');
+      try {
+        const r = await geminiChat({ ...opts, onText: d => { begin(); line({ t: 'text', d }); } });
+        begin(); line({ t: 'done', content: r.content, stop_reason: r.stop_reason, stop_details: r.stop_details ?? null });
+        return res.end();
+      } catch (e) {
+        if (!started) throw e;
+        line({ t: 'error', error: `Google's AI said (${e.geminiStatus || 'error'}): ${String(e.message).slice(0, 200)}` });
+        return res.end();
+      }
     }
 
     const betas = ['thinking-binding-controls-2026-08-01'];
