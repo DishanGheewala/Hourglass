@@ -1,78 +1,192 @@
 // The Hourglass assistant: a Claude-powered chat that can use the student's data and linked Google accounts.
 // The conversation and the notes it learns are saved in Firestore so it remembers across sessions.
-import { doc, getDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+import { doc, getDoc, setDoc, deleteDoc, collection, getDocs, query, orderBy, limit, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 import * as G from './google.js';
 import * as Local from './local-ai.js';
 import { esc, todayISO, addDays, fmtDate, fmtHM, fmtTime12 } from './util.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const MAX_STEPS = 25;
-const MAX_SAVED_CHARS = 700000; // keep the saved chat under Firestore's 1 MB document limit
+const MAX_SAVED_CHARS = 500000; // keep one saved chat under Firestore's 1 MB document limit
+const MAX_DOC_CHARS = 900000;
 const GREETING = 'Hi, how can I help?';
+const MAX_IMAGES = 4;
+const MAX_IMAGE_CHARS = 3500000; // total base64 size of images sent in one message (the server accepts about 4.5 MB)
 
 let D; // dependencies from app.js
-let chat = { messages: [], display: [], pending: [] };
+const blankChat = () => ({ id: null, title: '', titled: false, messages: [], display: [{ kind: 'ai', text: GREETING }], pending: [], createdAt: Date.now(), updatedAt: 0 });
+let chat = blankChat();
+let chats = []; // saved chats: { id, title, updatedAt }
+const cache = {}; // id -> saved chat data
+let attach = []; // images waiting to be sent: { data, mime, thumb }
 let notes = [];
 let busy = false;
 let loadedFor = null;
 let replyTimer = null;
+let turnStart = 0;
 
-const chatRef = () => doc(D.db, 'users', D.state.user.uid, 'ai', 'chat');
+const aiCol = () => collection(D.db, 'users', D.state.user.uid, 'ai');
+const chatDoc = id => doc(D.db, 'users', D.state.user.uid, 'ai', id);
 const memRef = () => doc(D.db, 'users', D.state.user.uid, 'ai', 'memory');
-// If the database rules for chat storage are not published yet, the chat is kept on this device instead.
-const localKey = () => 'hg_ai_' + D.state.user.uid;
-function localSave() { try { localStorage.setItem(localKey(), JSON.stringify({ messages: chat.messages, display: chat.display, pending: chat.pending, notes })); } catch {} }
-function localLoad() {
-  try {
-    const l = JSON.parse(localStorage.getItem(localKey()) || 'null');
-    if (l) { chat = { messages: l.messages || [], display: l.display || [], pending: l.pending || [] }; notes = l.notes || []; }
-  } catch {}
+// If the database rules for chat storage are not published yet, chats are kept on this device instead.
+const localKey = () => 'hg_chats_' + D.state.user.uid;
+const curKey = () => 'hg_ai_cur_' + D.state.user.uid;
+const localAll = () => { try { return JSON.parse(localStorage.getItem(localKey()) || '{}'); } catch { return {}; } };
+function localPut(id, data) { try { const m = localAll(); m[id] = data; localStorage.setItem(localKey(), JSON.stringify(m)); } catch {} }
+function localDrop(id) { try { const m = localAll(); delete m[id]; localStorage.setItem(localKey(), JSON.stringify(m)); } catch {} }
+function localNotes(n) { try { if (n) localStorage.setItem('hg_notes_' + D.state.user.uid, JSON.stringify(n)); else return JSON.parse(localStorage.getItem('hg_notes_' + D.state.user.uid) || '[]'); } catch { return []; } }
+const ms = t => (t && t.toMillis ? t.toMillis() : Number(t) || 0);
+const makeId = () => 'c_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+export function initAI(deps) {
+  D = deps;
+  document.addEventListener('change', e => {
+    if (e.target.matches('.vocab select')) syncVocab(e.target.closest('.vocab'));
+    if (e.target.id === 'ai-file') { addFiles([...e.target.files]); e.target.value = ''; }
+  });
+  document.addEventListener('paste', e => {
+    if (!e.target.closest?.('#tab-ai')) return;
+    const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/'));
+    if (files.length) { e.preventDefault(); addFiles(files); }
+  });
+  document.addEventListener('dragover', e => { if (e.target.closest?.('#tab-ai') && [...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault(); });
+  document.addEventListener('drop', e => {
+    if (!e.target.closest?.('#tab-ai')) return;
+    const files = [...(e.dataTransfer?.files || [])].filter(f => f.type.startsWith('image/'));
+    if (files.length) { e.preventDefault(); addFiles(files); }
+  });
 }
 
-export function initAI(deps) { D = deps; }
+// ---------- saving and loading chats ----------
+// Images are never stored in the database (too big): saved chats keep a note instead.
+const stripImages = messages => messages.map(m => Array.isArray(m.content) && m.content.some(b => b.type === 'image')
+  ? { ...m, content: m.content.map(b => (b.type === 'image' ? { type: 'text', text: '[The student shared an image here. It is no longer available.]' } : b)) } : m);
 
-// ---------- saving and loading ----------
+function toData(c) {
+  const d = { title: c.title || 'New chat', titled: !!c.titled, messages: JSON.stringify(stripImages(c.messages)), display: JSON.stringify(c.display), pending: c.pending, createdAt: c.createdAt, updatedAt: c.updatedAt };
+  while (JSON.stringify(d).length > MAX_DOC_CHARS && c.display.length > 20) { c.display.shift(); d.display = JSON.stringify(c.display); }
+  return d;
+}
+function fromData(id, d) {
+  return { id, title: d.title || (id === 'chat' ? 'Earlier chat' : 'Chat'), titled: !!d.titled || id === 'chat', messages: JSON.parse(d.messages || '[]'), display: JSON.parse(d.display || '[]'), pending: d.pending || [], createdAt: ms(d.createdAt) || ms(d.updatedAt), updatedAt: ms(d.updatedAt) };
+}
+function indexOf(id, d) { return { id, title: d.title || (id === 'chat' ? 'Earlier chat' : 'Chat'), updatedAt: ms(d.updatedAt) }; }
+
 export async function loadAI() {
   const uid = D.state.user.uid;
   if (loadedFor === uid) return;
   loadedFor = uid;
-  chat = { messages: [], display: [], pending: [] };
-  notes = [];
+  chat = blankChat(); chats = []; notes = [];
+  let docs = {};
   try {
-    const [c, m] = await Promise.all([getDoc(chatRef()), getDoc(memRef())]);
-    if (c.exists()) {
-      const d = c.data();
-      chat.messages = JSON.parse(d.messages || '[]');
-      chat.display = JSON.parse(d.display || '[]');
-      chat.pending = d.pending || [];
-    }
+    const [m, snap] = await Promise.all([getDoc(memRef()), getDocs(query(aiCol(), orderBy('updatedAt', 'desc'), limit(60)))]);
     if (m.exists()) notes = m.data().notes || [];
-  } catch (e) { console.warn('Could not load chat from the database, using this device', e); localLoad(); }
+    snap.docs.forEach(d => { if (d.id !== 'memory') docs[d.id] = d.data(); });
+  } catch (e) { console.warn('Could not load chats from the database, using this device', e); docs = {}; }
+  // Chats kept on this device (used when the database rules for chats are not published yet).
+  const local = localAll();
+  for (const [id, d] of Object.entries(local)) if (!docs[id] || ms(d.updatedAt) > ms(docs[id].updatedAt)) docs[id] = d;
+  if (!notes.length) notes = localNotes();
+  try { // chat from before there were several chats
+    const old = JSON.parse(localStorage.getItem('hg_ai_' + uid) || 'null');
+    if (old && !docs.chat && (old.messages || []).length) docs.chat = { title: 'Earlier chat', messages: JSON.stringify(old.messages), display: JSON.stringify(old.display || []), pending: old.pending || [], updatedAt: 1 };
+  } catch {}
+  for (const [id, d] of Object.entries(docs)) { if (!d.messages) continue; cache[id] = d; chats.push(indexOf(id, d)); }
+  chats.sort((a, b) => b.updatedAt - a.updatedAt);
+  let want = null; try { want = localStorage.getItem(curKey()); } catch {}
+  const pick = chats.find(c => c.id === want) || chats[0];
+  if (pick) { try { chat = fromData(pick.id, cache[pick.id]); } catch { chat = blankChat(); } }
   if (!chat.display.length) chat.display.push({ kind: 'ai', text: GREETING });
-  render();
+  render(); renderSide();
   startReplyWatch();
 }
 export function resetAI() {
-  loadedFor = null; chat = { messages: [], display: [], pending: [] }; notes = [];
+  loadedFor = null; chat = blankChat(); chats = []; notes = []; attach = [];
+  for (const k of Object.keys(cache)) delete cache[k];
   clearInterval(replyTimer); replyTimer = null;
   const log = $('#ai-log'); if (log) log.innerHTML = '';
+  const side = $('#ai-side'); if (side) side.innerHTML = '';
+  renderAttach();
 }
-async function saveChat() {
-  try {
-    await setDoc(chatRef(), { messages: JSON.stringify(chat.messages), display: JSON.stringify(chat.display), pending: chat.pending, updatedAt: serverTimestamp() });
-  } catch (e) { console.warn('Could not save chat to the database, keeping it on this device', e); localSave(); }
+async function saveChat(c = chat) {
+  if (!c.messages.length) return; // a blank chat is not saved until something is said
+  if (!c.id) c.id = makeId();
+  c.updatedAt = Date.now();
+  const data = toData(c);
+  cache[c.id] = data;
+  const entry = indexOf(c.id, data);
+  const i = chats.findIndex(x => x.id === c.id);
+  if (i >= 0) chats[i] = entry; else chats.push(entry);
+  chats.sort((x, y) => y.updatedAt - x.updatedAt);
+  if (c === chat) { try { localStorage.setItem(curKey(), c.id); } catch {} }
+  renderSide();
+  try { await setDoc(chatDoc(c.id), data); localDrop(c.id); }
+  catch (e) { console.warn('Could not save the chat to the database, keeping it on this device', e); localPut(c.id, data); }
 }
 async function saveNotes() {
   try { await setDoc(memRef(), { notes, updatedAt: serverTimestamp() }); }
-  catch (e) { console.warn('Could not save notes to the database, keeping them on this device', e); localSave(); }
+  catch (e) { console.warn('Could not save notes to the database, keeping them on this device', e); }
+  localNotes(notes);
 }
 export async function newChat() {
-  chat = { messages: [], display: [{ kind: 'ai', text: GREETING }], pending: [] };
-  await saveChat();
-  render();
+  if (busy) return D.toast('Wait for the answer to finish first.');
+  if (!chat.messages.length) { closeSide(); return; } // already a new chat
+  chat = blankChat(); attach = [];
+  try { localStorage.removeItem(curKey()); } catch {}
+  render(); renderSide(); renderAttach(); closeSide();
+}
+async function openChat(id) {
+  if (busy) return D.toast('Wait for the answer to finish first.');
+  if (!cache[id]) return;
+  try { chat = fromData(id, cache[id]); } catch { return; }
+  if (!chat.display.length) chat.display.push({ kind: 'ai', text: GREETING });
+  attach = [];
+  try { localStorage.setItem(curKey(), id); } catch {}
+  render(); renderSide(); renderAttach(); closeSide();
+}
+async function deleteChat(id) {
+  const c = chats.find(x => x.id === id);
+  if (!c || busy) return;
+  if (!confirm(`Delete the chat “${c.title}”? This can't be undone.`)) return;
+  try { await deleteDoc(chatDoc(id)); } catch (e) { console.warn('Could not delete the chat from the database', e); }
+  localDrop(id); delete cache[id];
+  chats = chats.filter(x => x.id !== id);
+  if (chat.id === id) {
+    const next = chats[0];
+    if (next) { chat = fromData(next.id, cache[next.id]); try { localStorage.setItem(curKey(), next.id); } catch {} }
+    else { chat = blankChat(); try { localStorage.removeItem(curKey()); } catch {} }
+    render();
+  }
+  renderSide();
 }
 export const getNotes = () => notes;
 export async function removeNote(i) { notes.splice(i, 1); await saveNotes(); }
+
+// ---------- chat list ----------
+const when = t => { if (!t) return ''; const d = new Date(t), n = new Date(); const days = Math.floor((new Date(n.getFullYear(), n.getMonth(), n.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 86400000);
+  return days <= 0 ? 'Today' : days === 1 ? 'Yesterday' : days < 7 ? d.toLocaleDateString(undefined, { weekday: 'long' }) : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); };
+function renderSide() {
+  const el = $('#ai-side'); if (!el) return;
+  const rows = chats.map(c => `<div class="chatrow ${c.id === chat.id ? 'on' : ''}" data-action="ai-open" data-id="${esc(c.id)}" role="button" tabindex="0"><span class="ct">${esc(c.title)}</span><small>${esc(when(c.updatedAt))}</small><button class="icon-btn" data-action="ai-del" data-id="${esc(c.id)}" aria-label="Delete chat ${esc(c.title)}"><svg class="i sm" aria-hidden="true"><use href="#i-trash"/></svg></button></div>`).join('');
+  el.innerHTML = `<div class="sidehead"><b>Chats</b><button class="btn small" data-action="ai-new">+ New chat</button></div>
+    <div class="chatlist">${chat.id ? '' : '<div class="chatrow on"><span class="ct">New chat</span></div>'}${rows || (chat.id ? '' : '<p class="muted" style="padding:6px 4px">Your chats are saved here.</p>')}</div>`;
+  const t = $('#ai-title'); if (t) t.textContent = chat.title || 'New chat';
+}
+const closeSide = () => $('#ai-wrap')?.classList.remove('open');
+
+// A first name for the chat right away, then a better one written by the AI after the first answer.
+const quickTitle = text => { const w = String(text).replace(/\s+/g, ' ').trim().split(' ').slice(0, 6).join(' '); return (w.length > 42 ? w.slice(0, 40) + '…' : w) || 'New chat'; };
+async function refineTitle(chatRef, userText, aiText) {
+  try {
+    const token = await D.state.user.getIdToken();
+    const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30000),
+      body: JSON.stringify({ title: true, messages: [{ role: 'user', content: `Student: ${userText.slice(0, 400)}\nAssistant: ${aiText.slice(0, 600)}` }] }) });
+    if (!res.ok) return;
+    const j = await res.json();
+    let t = (j.content || []).filter(b => b.type === 'text').map(b => b.text).join(' ').split('\n')[0].replace(/["“”*#]/g, '').replace(/[.!]+$/, '').trim();
+    if (t && t.length <= 60) { chatRef.title = t; chatRef.titled = true; if (chatRef.id) await saveChat(chatRef); renderSide(); }
+  } catch { /* keep the quick title */ }
+}
 
 // ---------- rendering ----------
 // Small, safe Markdown: paragraphs, **bold**, *italic*, `code`, links, headings, bullet and numbered lists.
@@ -103,7 +217,7 @@ const emailOnly = from => (String(from).match(/<([^>]+)>/) || [, from])[1].trim(
 
 function itemHTML(it, i) {
   switch (it.kind) {
-    case 'user': return `<div class="msg user">${esc(it.text).replace(/\n/g, '<br>')}</div>`;
+    case 'user': return `<div class="msg user">${(it.imgs || []).length ? `<div class="imgs">${it.imgs.map(u => `<img src="${esc(u)}" alt="Image you shared">`).join('')}</div>` : ''}${it.text ? esc(it.text).replace(/\n/g, '<br>') : ''}</div>`;
     case 'ai': return `<div class="msg ai">${md(it.text)}</div>`;
     case 'status': return `<div class="msg status">${esc(it.text)}</div>`;
     case 'error': return `<div class="msg ai err-msg">${esc(it.text)}</div>`;
@@ -119,8 +233,33 @@ function itemHTML(it, i) {
         <div class="row"><button class="primary" data-action="email-send" data-i="${i}">Send</button><button class="btn" data-action="email-cancel" data-i="${i}">Cancel</button></div></div>`;
     }
     case 'quiz': return quizHTML(it, i);
+    case 'vocab': return vocabHTML(it, i);
     default: return '';
   }
+}
+function vocabHTML(it, i) {
+  const done = !!it.submitted;
+  const used = new Set((it.answers || []).filter(Boolean));
+  const rows = it.items.map((q, n) => {
+    const given = it.answers?.[n] ?? '';
+    const right = done && norm(given) === norm(q.answer);
+    const parts = String(q.scenario).split(/_{3,}/);
+    const blank = done ? `<span class="blank filled ${right ? 'ok' : 'bad'}">${esc(given || '—')}</span>` : '<span class="blank">______</span>';
+    const scenario = parts.map(esc).join(blank);
+    const sel = `<select name="v${n}" ${done ? 'disabled' : ''} aria-label="Answer for question ${n + 1}"><option value="">Choose…</option>${it.bank.map(t => `<option value="${esc(t)}" ${given === t ? 'selected' : ''} ${!done && used.has(t) && given !== t ? 'disabled' : ''}>${esc(t)}</option>`).join('')}</select>`;
+    const res = done ? `<div class="qres ${right ? 'ok' : 'bad'}">${right ? '✓ Correct' : `✗ Correct answer: <b>${esc(q.answer)}</b>`}<br><span>${esc(q.explanation)}</span></div>` : '';
+    return `<div class="vrow"><div class="vsc"><span class="vn">${n + 1}.</span> ${scenario}</div><div class="vans">${sel}</div>${res ? `<div class="vres">${res}</div>` : ''}</div>`;
+  }).join('');
+  return `<div class="msg ai vocab" data-i="${i}"><p><b>${esc(it.title)}</b></p>${done ? `<p><b>Score: ${it.score}/${it.items.length}</b></p>` : ''}
+    <div class="bank"><small>Word bank (use each word once)</small><div class="chips">${it.bank.map(t => `<span class="chip ${used.has(t) ? 'used' : ''}" data-term="${esc(t)}">${esc(t)}</span>`).join('')}</div></div>
+    ${rows}${done ? '' : `<button class="primary" data-action="vocab-submit" data-i="${i}">Submit answers</button>`}</div>`;
+}
+function syncVocab(card) { // each word can be used only once
+  if (!card) return;
+  const sels = [...card.querySelectorAll('select')];
+  const used = new Set(sels.map(x => x.value).filter(Boolean));
+  sels.forEach(x => [...x.options].forEach(o => { o.disabled = !!o.value && used.has(o.value) && o.value !== x.value; }));
+  card.querySelectorAll('.bank .chip').forEach(c => c.classList.toggle('used', used.has(c.dataset.term)));
 }
 const norm = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9.]+/g, ' ').trim();
 function quizHTML(it, i) {
@@ -141,7 +280,7 @@ function quizHTML(it, i) {
 function render() {
   const log = $('#ai-log');
   if (!log) return;
-  const suggest = !busy && chat.display.length <= 1 ? `<div class="suggest">${[
+  const suggest = !busy && chat.display.length <= 1 && !chat.messages.length ? `<div class="suggest">${[
     ['How did I sleep this week, and what should I change?', 'How is my sleep?'],
     ['Help me plan my study time for my upcoming deadlines.', 'Plan my week'],
     ['Summarize my unread emails from the last 3 days.', 'Summarize my emails'],
@@ -149,6 +288,7 @@ function render() {
   ].map(([t, l]) => `<button class="chip" data-action="chip" data-text="${esc(t)}">${esc(l)}</button>`).join('')}</div>` : '';
   log.innerHTML = chat.display.map(itemHTML).join('') + suggest + (busy ? '<div class="msg status" id="ai-working"><span class="typing"><i></i><i></i><i></i></span> <span id="ai-wtext"></span></div>' : '');
   log.scrollTop = log.scrollHeight;
+  const t = $('#ai-title'); if (t) t.textContent = chat.title || 'New chat';
 }
 function setWorking(text) { const w = $('#ai-wtext'); if (w) w.textContent = text; }
 function show(item) { chat.display.push(item); render(); }
@@ -285,7 +425,42 @@ const TOOLS = {
   },
   async show_quiz({ title, questions }) {
     if (!Array.isArray(questions) || !questions.length) throw new Error('A quiz needs questions.');
-    show({ kind: 'quiz', title, questions: questions.slice(0, 40), submitted: false });
+    const tidy = c => String(c ?? '').replace(/\s*@\s*/g, ' ').replace(/^\s*\(?[A-Ha-h1-9][).:]\s+/, '').replace(/\s+/g, ' ').trim();
+    const qs = [];
+    for (const [n, q] of questions.slice(0, 40).entries()) {
+      const choices = Array.isArray(q.choices) ? [...new Set(q.choices.map(tidy).filter(Boolean))] : [];
+      if (choices.length) {
+        if (choices.length < 3) throw new Error(`Question ${n + 1} needs 4 distinct plain-text choices.`);
+        const a = tidy(q.answer);
+        const hit = choices.find(c => c === a) || choices.find(c => norm(c) === norm(a));
+        if (!hit) throw new Error(`Question ${n + 1}: the answer "${q.answer}" must be copied exactly from its choices.`);
+        qs.push({ question: String(q.question).trim(), choices, answer: hit, explanation: String(q.explanation || '').trim() });
+      } else qs.push({ question: String(q.question).trim(), answer: tidy(q.answer), explanation: String(q.explanation || '').trim() });
+    }
+    show({ kind: 'quiz', title: tidy(title) || 'Quiz', questions: qs, submitted: false });
+    return { shown_to_student: true, note: 'Results will be sent to you after the student submits.' };
+  },
+  async show_vocab_test({ title, terms, items }) {
+    if (!Array.isArray(terms) || !Array.isArray(items)) throw new Error('Provide "terms" and "items" lists.');
+    const clean = t => String(t ?? '').replace(/\s+/g, ' ').trim();
+    const list = [...new Set(terms.map(clean).filter(Boolean))];
+    if (list.length < 3) throw new Error('A vocabulary test needs at least 3 terms.');
+    if (items.length !== list.length) throw new Error(`There are ${list.length} terms but ${items.length} items. Write exactly one item per term.`);
+    const seen = new Set(), out = [];
+    for (const [n, it] of items.entries()) {
+      const hit = list.find(t => t === clean(it.answer)) || list.find(t => norm(t) === norm(it.answer));
+      if (!hit) throw new Error(`Item ${n + 1}: the answer "${it.answer}" is not in the terms list. Copy it exactly.`);
+      if (seen.has(hit)) throw new Error(`The term "${hit}" is used more than once. Each term must be used exactly once.`);
+      seen.add(hit);
+      let sc = String(it.scenario || '').trim();
+      const blanks = sc.match(/_{3,}/g) || [];
+      if (blanks.length !== 1) throw new Error(`Item ${n + 1}: the scenario needs exactly one blank written as _____ .`);
+      out.push({ scenario: sc, answer: hit, explanation: String(it.explanation || '').trim() });
+    }
+    if (seen.size !== list.length) throw new Error('Every term must be used exactly once.');
+    const bank = [...list];
+    for (let i = bank.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [bank[i], bank[j]] = [bank[j], bank[i]]; }
+    show({ kind: 'vocab', title: clean(title) || 'Vocabulary test', bank, items: out, answers: [], submitted: false });
     return { shown_to_student: true, note: 'Results will be sent to you after the student submits.' };
   }
 };
@@ -304,9 +479,12 @@ async function runTool(block) {
 // ---------- the conversation loop ----------
 // Which AI answers: the cloud AI when the server has a key, otherwise the free on-device AI.
 let useLocal = false;
+// Images are sent only with the turn they belong to; earlier ones are replaced by a note (keeps requests small).
+const forServer = messages => messages.map((m, i) => i < turnStart && Array.isArray(m.content) && m.content.some(b => b.type === 'image')
+  ? { ...m, content: m.content.map(b => (b.type === 'image' ? { type: 'text', text: '[Image shared earlier: no longer shown]' } : b)) } : m);
 async function callServer() {
   const token = await D.state.user.getIdToken();
-  const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ messages: chat.messages }), signal: AbortSignal.timeout(75000) }).catch(e => { throw new Error(e && e.name === 'TimeoutError' ? 'The AI took too long to answer. Please try again.' : 'Could not reach the AI server. Check your connection.'); });
+  const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ messages: forServer(chat.messages), linked: D.state.profile?.linked || {} }), signal: AbortSignal.timeout(75000) }).catch(e => { throw new Error(e && e.name === 'TimeoutError' ? 'The AI took too long to answer. Please try again.' : 'Could not reach the AI server. Check your connection.'); });
   let data = {};
   try { data = await res.json(); } catch {}
   if ((res.status === 503 && /not set up/i.test(data.error || '')) || res.status === 404) throw Object.assign(new Error('not set up'), { notSetUp: true, detail: res.status === 404 ? 'the AI server was not found (404)' : (data.error || 'no key set') });
@@ -345,29 +523,35 @@ async function callModel() {
   return callLocal();
 }
 
-export async function ask(text) {
+export async function ask(text, images = []) {
   if (busy) return;
+  text = String(text || '').trim();
+  if (!text && !images.length) return;
   busy = true;
   // Start a fresh thread (keeping the visible history) when the saved one gets too large.
-  if (JSON.stringify(chat.messages).length > MAX_SAVED_CHARS) {
+  if (JSON.stringify(stripImages(chat.messages)).length > MAX_SAVED_CHARS) {
     chat.messages = [];
     chat.display.push({ kind: 'status', text: 'Started a fresh conversation thread. I still remember the notes I saved about you.' });
   }
   if (chat.display.length > 150) chat.display = chat.display.slice(-150);
   const startLen = chat.messages.length;
+  turnStart = startLen;
+  const firstTurn = !chat.messages.length && !chat.titled;
+  if (firstTurn) chat.title = quickTitle(text || 'Image chat');
   const notices = chat.pending.map(t => ({ type: 'text', text: `[Automatic notice from the app, not typed by the student] ${t}` }));
-  chat.messages.push({ role: 'user', content: [...notices, { type: 'text', text }] });
+  const blocks = [...notices, ...images.map(im => ({ type: 'image', source: { type: 'base64', media_type: im.mime, data: im.data } })), { type: 'text', text: text || 'Please look at the image I shared.' }];
+  chat.messages.push({ role: 'user', content: blocks });
   chat.messages.push({ role: 'system', content: contextText() });
-  chat.display.push({ kind: 'user', text });
-  render();
-  let ok = false;
+  chat.display.push({ kind: 'user', text, imgs: images.map(im => im.thumb) });
+  render(); renderSide();
+  let ok = false, firstReply = '';
   try {
     for (let step = 0; step < (useLocal ? 6 : MAX_STEPS); step++) {
       const r = await callModel();
       const content = r.content?.length ? r.content : [{ type: 'text', text: '…' }];
       chat.messages.push({ role: 'assistant', content });
       const said = content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
-      if (said && said !== '…') show({ kind: 'ai', text: said });
+      if (said && said !== '…') { show({ kind: 'ai', text: said }); if (!firstReply) firstReply = said; }
       if (r.stop_reason === 'refusal') { if (!said) show({ kind: 'ai', text: "I can't help with that one, but I'm happy to help with something else." }); break; }
       if (r.stop_reason === 'pause_turn') continue;
       if (r.stop_reason === 'tool_use') {
@@ -391,8 +575,44 @@ export async function ask(text) {
     if (ok) chat.pending = [];
     render();
     await saveChat();
+    if (ok && firstTurn && !useLocal) refineTitle(chat, text || 'Image chat', firstReply || 'Done.');
   }
 }
+
+// ---------- pictures and screenshots ----------
+const loadImg = file => new Promise((res, rej) => { const u = URL.createObjectURL(file); const im = new Image(); im.onload = () => { URL.revokeObjectURL(u); res(im); }; im.onerror = () => { URL.revokeObjectURL(u); rej(new Error('bad image')); }; im.src = u; });
+async function shrink(file, max, q) {
+  let src;
+  try { src = await createImageBitmap(file); } catch { src = await loadImg(file); }
+  const w = src.width || src.naturalWidth, h = src.height || src.naturalHeight;
+  const k = Math.min(1, max / Math.max(w, h));
+  const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k));
+  const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(src, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', q);
+}
+async function addFiles(files) {
+  const room = MAX_IMAGES - attach.length;
+  if (room <= 0) return D.toast(`You can attach up to ${MAX_IMAGES} images at a time.`);
+  for (const f of files.slice(0, room)) {
+    try {
+      if (!f.type.startsWith('image/')) throw new Error('not an image');
+      if (f.size > 25 * 1024 * 1024) { D.toast('That image is too big (over 25 MB).'); continue; }
+      const full = await shrink(f, 1280, 0.82), thumb = await shrink(f, 140, 0.55);
+      const data = full.split(',')[1];
+      if (attach.reduce((n, a) => n + a.data.length, 0) + data.length > MAX_IMAGE_CHARS) { D.toast('Those images are too large together. Remove one.'); continue; }
+      attach.push({ data, mime: 'image/jpeg', thumb });
+    } catch { D.toast("Couldn't read that image. Try a PNG or JPG."); }
+  }
+  if (files.length > room) D.toast(`Only the first ${MAX_IMAGES} images were attached.`);
+  renderAttach();
+}
+function renderAttach() {
+  const el = $('#ai-attach'); if (!el) return;
+  el.hidden = !attach.length;
+  el.innerHTML = attach.map((a, i) => `<div class="thumb"><img src="${esc(a.thumb)}" alt="Attached image ${i + 1}"><button type="button" data-action="ai-unattach" data-i="${i}" aria-label="Remove image ${i + 1}">×</button></div>`).join('');
+}
+export function takeAttachments() { const a = attach; attach = []; renderAttach(); return a; }
+export const hasAttachments = () => attach.length > 0;
 
 // ---------- buttons inside the chat ----------
 export const aiActions = {
@@ -437,7 +657,23 @@ export const aiActions = {
     chat.pending.push(`The student submitted the quiz "${it.title}": ${it.score}/${it.questions.length}.${missed.length ? ' Missed: ' + missed.join('; ') : ''} (Typed answers are auto-graded by exact match, so a close answer may be marked wrong; judge those yourself.)`);
     render(); await saveChat();
   },
-  'ai-new': async () => { if (!busy && confirm('Start a new chat? The notes I saved about you are kept.')) await newChat(); }
+  'vocab-submit': async b => {
+    const i = +b.dataset.i, it = chat.display[i], card = b.closest('.vocab');
+    const answers = it.items.map((q, n) => card.querySelector(`[name=v${n}]`)?.value || '');
+    const blanks = answers.filter(a => !a).length;
+    if (blanks && !confirm(`You left ${blanks} blank${blanks > 1 ? 's' : ''}. Submit anyway?`)) return;
+    it.answers = answers; it.submitted = true;
+    it.score = it.items.filter((q, n) => norm(answers[n]) === norm(q.answer)).length;
+    const missed = it.items.map((q, n) => (norm(answers[n]) === norm(q.answer) ? null : `"${q.scenario}" (answered "${answers[n] || 'blank'}", correct "${q.answer}")`)).filter(Boolean);
+    chat.pending.push(`The student submitted the vocabulary test "${it.title}": ${it.score}/${it.items.length}.${missed.length ? ' Missed: ' + missed.join('; ') : ''}`);
+    render(); await saveChat();
+  },
+  'ai-new': () => newChat(),
+  'ai-history': () => $('#ai-wrap')?.classList.toggle('open'),
+  'ai-open': b => openChat(b.dataset.id),
+  'ai-del': b => deleteChat(b.dataset.id),
+  'ai-attach': () => $('#ai-file')?.click(),
+  'ai-unattach': b => { attach.splice(+b.dataset.i, 1); renderAttach(); }
 };
 
 // ---------- watching for replies to emails sent from Hourglass ----------

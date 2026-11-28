@@ -46,8 +46,16 @@ Email
 
 Study materials from Google Drive
 - drive_search finds any kind of file (Google Docs, Slides, Sheets, PDFs, Word files, text). Read the files with drive_read_file before writing anything about them.
-- You can make summaries, study guides, flashcards, outlines and practice tests. For a practice quiz, call show_quiz so the student can take it inside the app (answers and explanations appear only after they submit). Use application-based questions, not just definitions. Every time they ask for another quiz on the same material, write completely new questions.
+- You can make summaries, study guides, flashcards and outlines as normal chat text. Tests and quizzes are different, see the next section.
 - If they want to keep the material, save it with drive_create_doc.
+
+Quizzes and tests (very important: keep the format consistent)
+- Never write a quiz or test as plain chat text. Always call a tool so the student can take it in the app. Never put answers or explanations in chat text before the student submits.
+- For vocabulary or term lists (SAT vocab, key terms, definitions to learn), always call show_vocab_test: fill-in-the-blank scenario sentences. Each scenario applies one term in a realistic situation (never a definition) and contains exactly one blank written as _____ . "terms" lists every term once; "items" has exactly one item per term, so every term is used exactly once as an answer. Do not mention which unit, chapter or section a term came from.
+- For any other subject, call show_quiz with exactly 4 answer choices per question, written as plain text: no letters or numbers in front, no symbols such as @ or _ , and no blanks inside the choices. The "answer" must be copied exactly from one of the choices. Put the correct answer in a different position from question to question.
+- Questions should apply ideas to realistic situations, not just ask for definitions.
+- When the student asks for another test or quiz on the same material, write completely new scenarios and questions; reuse none of the earlier ones.
+- If the student shares an image or screenshot (a worksheet, notes, a schedule, a chart), look at it carefully and use what it shows.
 
 Deadlines and calendar
 - add_deadline saves a deadline in Hourglass (and Google Calendar too when linked). When the student mentions an assignment, test or due date, offer to add it, or add it directly when they ask. Break big projects into smaller study deadlines when that helps.
@@ -184,7 +192,7 @@ const TOOLS = [
   },
   {
     name: 'show_quiz',
-    description: 'Show an interactive practice quiz in the app. The student answers every question, then submits; only then do they see which answers were right and why.',
+    description: 'Show an interactive multiple-choice quiz in the app (use show_vocab_test for vocabulary). The student answers every question, then submits; only then do they see which answers were right and why.',
     input_schema: {
       type: 'object',
       properties: {
@@ -195,7 +203,7 @@ const TOOLS = [
             type: 'object',
             properties: {
               question: str('Question text (prefer real-world scenarios that apply the idea)'),
-              choices: { type: 'array', items: { type: 'string' }, description: 'Optional answer choices for multiple choice; omit for a typed answer' },
+              choices: { type: 'array', items: { type: 'string' }, description: 'Exactly 4 plain-text choices: no letters or numbers in front, no symbols like @ or _' },
               answer: str('The correct answer (must match one choice exactly for multiple choice)'),
               explanation: str('Why that answer is right')
             },
@@ -206,8 +214,40 @@ const TOOLS = [
       required: ['title', 'questions']
     }
   },
+  {
+    name: 'show_vocab_test',
+    description: 'Show an interactive vocabulary test: fill-in-the-blank scenarios (scenario on the left, answer on the right) with a shuffled word bank. Every term is used exactly once. The student submits, and only then see right/wrong answers and explanations.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: str('Test title (do not mention units or sections)'),
+        terms: { type: 'array', items: { type: 'string' }, description: 'Every term being tested, each exactly once' },
+        items: {
+          type: 'array',
+          description: 'Exactly one item per term',
+          items: {
+            type: 'object',
+            properties: {
+              scenario: str('A realistic situation that applies the term, with exactly one blank written as _____'),
+              answer: str('The term that fills the blank, copied exactly from terms'),
+              explanation: str('Why this term fits the scenario')
+            },
+            required: ['scenario', 'answer', 'explanation']
+          }
+        }
+      },
+      required: ['title', 'terms', 'items']
+    }
+  },
   { type: 'web_search_20260209', name: 'web_search', max_uses: 5 }
 ];
+
+// Tools that need a linked Google service are only offered when it is linked (smaller, faster requests for Gemini).
+const GATED = { gmail: ['draft_email', 'gmail_search', 'gmail_read'], calendar: ['calendar_list_events', 'calendar_create_event'], drive: ['drive_search', 'drive_read_file', 'drive_create_doc'] };
+function toolsFor(linked = {}) {
+  const hidden = new Set(Object.entries(GATED).filter(([k]) => !linked?.[k]).flatMap(([, v]) => v));
+  return TOOLS.filter(t => t.input_schema && !hidden.has(t.name));
+}
 
 async function countUsage(uid) {
   if (!hasAdmin()) return true; // the daily limit needs the optional service account
@@ -230,16 +270,25 @@ export default async function handler(req, res) {
     const which = provider();
     if (!which) throw Object.assign(new Error('The AI is not set up yet: add GEMINI_API_KEY (free) or ANTHROPIC_API_KEY in Vercel (SETUP.md, step 3).'), { status: 503 });
     const user = await requireUser(req);
-    const { messages } = await readJson(req);
+    const { messages, title, linked } = await readJson(req);
     if (!Array.isArray(messages) || !messages.length) throw Object.assign(new Error('No messages.'), { status: 400 });
     if (JSON.stringify(messages).length > 4_000_000) throw Object.assign(new Error('This chat is too long. Start a new chat.'), { status: 413 });
     if (messages.some(m => !['user', 'assistant', 'system'].includes(m?.role))) throw Object.assign(new Error('Bad message.'), { status: 400 });
+    if (title) { // a short automatic name for a chat
+      const TITLE_SYSTEM = 'You name chats. Write a very short title (2 to 5 words, no quotes, no ending punctuation) that says what the chat is about. Reply with only the title.';
+      if (which === 'gemini') {
+        const r = await geminiChat({ system: TITLE_SYSTEM, tools: [], messages: messages.slice(-2), apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-flash-latest' });
+        return res.status(200).json({ content: r.content, stop_reason: 'end_turn' });
+      }
+      const r = await client.beta.messages.create({ model: MODEL, max_tokens: 60, output_config: { effort: 'low' }, system: TITLE_SYSTEM, messages: messages.slice(-2) });
+      return res.status(200).json({ content: r.content, stop_reason: r.stop_reason });
+    }
     if (!(await countUsage(user.uid))) throw Object.assign(new Error(`You've reached today's limit of ${DAILY_LIMIT} AI steps. It resets tomorrow.`), { status: 429 });
 
     if (which === 'gemini') {
       const r = await geminiChat({
         system: SYSTEM.replace(' Use web search when current or factual information would help.', ''),
-        tools: TOOLS, messages, apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-flash-latest'
+        tools: toolsFor(linked), messages, apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-flash-latest'
       });
       return res.status(200).json(r);
     }

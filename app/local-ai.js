@@ -108,6 +108,7 @@ export function toChat(messages) {
     } else {
       for (const b of blocks) {
         if (b.type === 'text') push('user', b.text);
+        else if (b.type === 'image') push('user', '[The student attached an image, which this on-device AI cannot see. Say so and ask them to describe it or use the full AI.]');
         else if (b.type === 'tool_result') push('user', `<tool_response>\n${clip(typeof b.content === 'string' ? b.content : JSON.stringify(b.content), TOOL_RESULT_CHARS)}\n</tool_response>`);
       }
     }

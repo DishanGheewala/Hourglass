@@ -807,7 +807,7 @@ const forms = {
       toast('Password changed.');
     } catch (e) { toast(e.code === 'auth/invalid-credential' || e.code === 'auth/wrong-password' ? 'Your current password is wrong.' : 'Could not change the password.'); }
   },
-  ai: async f => { const t = f.q.value.trim(); f.q.value = ''; f.q.style.height = ''; if (t) await AI.ask(t); }
+  ai: async f => { const t = f.q.value.trim(); if (!t && !AI.hasAttachments()) return; f.q.value = ''; f.q.style.height = ''; await AI.ask(t, AI.takeAttachments()); }
 };
 document.addEventListener('submit', async e => {
   const f = e.target.closest('form[data-form]');

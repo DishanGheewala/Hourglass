@@ -28,6 +28,7 @@ function toContents(messages) {
       if (m.role === 'system') parts.push({ text: `[Context from the app]\n${m.content}` });
       else for (const b of Array.isArray(m.content) ? m.content : [{ type: 'text', text: String(m.content) }]) {
         if (b.type === 'text' && b.text) parts.push({ text: b.text });
+        else if (b.type === 'image' && b.source?.data) parts.push({ inlineData: { mimeType: b.source.media_type || 'image/jpeg', data: b.source.data } });
         else if (b.type === 'tool_result') {
           let v = b.content;
           if (Array.isArray(v)) v = v.map(x => x.text || '').join('\n');
