@@ -306,7 +306,7 @@ async function runTool(block) {
 let useLocal = false;
 async function callServer() {
   const token = await D.state.user.getIdToken();
-  const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ messages: chat.messages }) });
+  const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ messages: chat.messages }), signal: AbortSignal.timeout(75000) }).catch(e => { throw new Error(e && e.name === 'TimeoutError' ? 'The AI took too long to answer. Please try again.' : 'Could not reach the AI server. Check your connection.'); });
   let data = {};
   try { data = await res.json(); } catch {}
   if ((res.status === 503 && /not set up/i.test(data.error || '')) || res.status === 404) throw Object.assign(new Error('not set up'), { notSetUp: true, detail: res.status === 404 ? 'the AI server was not found (404)' : (data.error || 'no key set') });

@@ -60,8 +60,10 @@ export async function geminiChat({ system, tools, messages, apiKey, model, fetch
     tools: [{ functionDeclarations: tools.filter(t => t.input_schema).map(toDecl) }],
     generationConfig: { maxOutputTokens: 8192 }
   };
-  const call = m => fetchImpl(`${BASE}/${m}:generateContent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey }, body: JSON.stringify(body) });
-  let res = await call(model);
+  const call = m => fetchImpl(`${BASE}/${m}:generateContent`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey }, body: JSON.stringify(body), signal: AbortSignal.timeout(40000) });
+  let res;
+  try { res = await call(model); }
+  catch (e) { throw Object.assign(new Error(e && e.name === 'TimeoutError' ? 'Google took too long to answer. Try again.' : 'Could not reach Google: ' + (e && e.message)), { geminiStatus: 504 }); }
   if (res.status === 404 && !fallbackModel) {
     const alt = await findFlashModel(apiKey, fetchImpl).catch(() => null);
     if (alt && alt !== model) { fallbackModel = alt; model = alt; res = await call(model); }
