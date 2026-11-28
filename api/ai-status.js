@@ -8,7 +8,7 @@ export default async function handler(req, res) {
     ANTHROPIC_API_KEY_set: has('ANTHROPIC_API_KEY'),
     GEMINI_API_KEY_set: has('GEMINI_API_KEY'),
     GEMINI_API_KEY_length: (process.env.GEMINI_API_KEY || '').length,
-    gemini_model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+    gemini_model: (/^[a-z0-9.-]+$/.test(req.query.model || '') ? req.query.model : null) || process.env.GEMINI_MODEL || 'gemini-flash-latest',
     node: process.version,
     deployment: process.env.VERCEL_GIT_COMMIT_SHA ? process.env.VERCEL_GIT_COMMIT_SHA.slice(0, 7) : null,
     vercel_env: process.env.VERCEL_ENV || null

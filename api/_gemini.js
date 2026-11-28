@@ -47,7 +47,9 @@ async function findFlashModel(apiKey, fetchImpl) {
   const res = await fetchImpl(`${BASE}?pageSize=200`, { headers: { 'x-goog-api-key': apiKey } });
   if (!res.ok) return null;
   const j = await res.json().catch(() => ({}));
-  const ok = (j.models || []).filter(m => (m.supportedGenerationMethods || []).includes('generateContent') && /^models\/gemini-[\d.]+-flash$/.test(m.name));
+  const ok = (j.models || []).filter(m => (m.supportedGenerationMethods || []).includes('generateContent') && /^models\/gemini-(flash-latest|[\d.]+-flash)$/.test(m.name));
+  const latest = ok.find(m => m.name === 'models/gemini-flash-latest');
+  if (latest) return 'gemini-flash-latest';
   ok.sort((a, b) => parseFloat(b.name.match(/gemini-([\d.]+)/)[1]) - parseFloat(a.name.match(/gemini-([\d.]+)/)[1]));
   return ok[0] ? ok[0].name.replace('models/', '') : null;
 }

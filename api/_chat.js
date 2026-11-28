@@ -239,7 +239,7 @@ export default async function handler(req, res) {
     if (which === 'gemini') {
       const r = await geminiChat({
         system: SYSTEM.replace(' Use web search when current or factual information would help.', ''),
-        tools: TOOLS, messages, apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-2.5-flash'
+        tools: TOOLS, messages, apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-flash-latest'
       });
       return res.status(200).json(r);
     }
