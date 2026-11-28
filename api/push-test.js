@@ -8,7 +8,7 @@ export default async function handler(req, res) {
     const user = await requireUser(req);
     const { VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT } = process.env;
     if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) throw Object.assign(new Error('Alerts are not set up on the server yet (SETUP.md, step 5).'), { status: 503 });
-    const ref = admin().db.doc(`users/${user.uid}`);
+    const ref = (await admin()).db.doc(`users/${user.uid}`);
     const snap = await ref.get();
     const subs = snap.exists ? snap.data().subs || [] : [];
     if (!subs.length) throw Object.assign(new Error('Turn on alerts for this device first.'), { status: 400 });

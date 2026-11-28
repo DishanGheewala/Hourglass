@@ -3,10 +3,13 @@
   "private": true,
   "type": "module",
   "description": "Hourglass: make every hour count. Static app in /app plus Vercel serverless functions in /api.",
-  "engines": { "node": "22.x" },
+  "engines": {
+    "node": "22.x"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.14.0",
     "firebase-admin": "^14.5.1",
+    "jose": "^6.2.18",
     "web-push": "^4.0.0"
   }
 }

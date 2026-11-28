@@ -3,7 +3,6 @@
 // and this function only adds the secret API key, the fixed system prompt and the tool list.
 import Anthropic from '@anthropic-ai/sdk';
 import { admin, hasAdmin, requireUser, sendError, readJson } from './_lib.js';
-import { FieldValue } from 'firebase-admin/firestore';
 import { geminiChat } from './_gemini.js';
 
 export const config = { maxDuration: 60 };
@@ -212,7 +211,7 @@ const TOOLS = [
 
 async function countUsage(uid) {
   if (!hasAdmin()) return true; // the daily limit needs the optional service account
-  const { db } = admin();
+  const { db } = await admin();
   const day = new Date().toISOString().slice(0, 10);
   const ref = db.doc(`usage/${uid}`);
   return db.runTransaction(async t => {
@@ -220,7 +219,7 @@ async function countUsage(uid) {
     const d = snap.exists ? snap.data() : {};
     const count = d.day === day ? d.count || 0 : 0;
     if (count >= DAILY_LIMIT) return false;
-    t.set(ref, { day, count: count + 1, updatedAt: FieldValue.serverTimestamp() });
+    t.set(ref, { day, count: count + 1, updatedAt: new Date() });
     return true;
   });
 }

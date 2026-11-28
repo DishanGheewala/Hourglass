@@ -28,7 +28,7 @@ export default async function handler(req, res) {
     if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) throw new Error('VAPID keys are not set in Vercel.');
     const vapidDetails = { subject: VAPID_SUBJECT || 'mailto:admin@example.com', publicKey: VAPID_PUBLIC_KEY, privateKey: VAPID_PRIVATE_KEY };
 
-    const { db } = admin();
+    const { db } = await admin();
     const snap = await db.collection('users').select('alerts', 'subs', 'tz', 'sent').get();
     let sent = 0;
     for (const doc of snap.docs) {
